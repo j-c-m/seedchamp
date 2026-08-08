@@ -1,0 +1,131 @@
+# PR / master gate: fmt, clippy, tests, multi-OS smoke with rasterbar.
+#
+# Stages:
+#   1) fmt + clippy + test-ubuntu (parallel; gate)
+#   2) test-macos, smoke-linux, smoke-macos (after gate)
+#   3) smoke-freebsd (only after smoke-linux)
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Stage 1: fast Linux gate ───────────────────────────────────────────
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  # ── Stage 2: after Linux gate ──────────────────────────────────────────
+  test-macos:
+    needs: [fmt, clippy, test-ubuntu]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  smoke-linux:
+    needs: [fmt, clippy, test-ubuntu]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install python3-libtorrent
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-libtorrent
+          python3 -c "import libtorrent; print('libtorrent ok')"
+      - run: cargo build --release
+      - run: cargo run --release -- doctor
+      - name: Smoke (with rasterbar)
+        run: ./bench/smoke.py --with-rasterbar
+
+  smoke-macos:
+    needs: [fmt, clippy, test-ubuntu]
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libtorrent (brew + pip venv bindings)
+        run: |
+          brew update
+          brew install libtorrent-rasterbar python@3.12 pkg-config
+          export PATH="$(brew --prefix python@3.12)/bin:$PATH"
+          export PKG_CONFIG_PATH="$(brew --prefix libtorrent-rasterbar)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export LDFLAGS="-L$(brew --prefix libtorrent-rasterbar)/lib ${LDFLAGS:-}"
+          export CPPFLAGS="-I$(brew --prefix libtorrent-rasterbar)/include ${CPPFLAGS:-}"
+          # PEP 668: brew Python is externally managed — use a project venv for pip.
+          python3.12 -m venv .venv-ci
+          .venv-ci/bin/pip install --upgrade pip
+          .venv-ci/bin/pip install libtorrent
+          .venv-ci/bin/python -c "import libtorrent; print('libtorrent ok')"
+      - run: cargo build --release
+      - run: cargo run --release -- doctor
+      - name: Smoke (with rasterbar)
+        run: |
+          .venv-ci/bin/python ./bench/smoke.py --with-rasterbar
+
+  # ── Stage 3: expensive FreeBSD only after Linux smoke ──────────────────
+  smoke-freebsd:
+    needs: [smoke-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: FreeBSD 15.1 VM (test + smoke + rasterbar)
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          usesh: true
+          prepare: |
+            # py312-sqlite3: stdlib sqlite3 needs _sqlite3 (not in base python312)
+            pkg install -y rust python312 py312-sqlite3 py312-libtorrent-rasterbar git pkgconf
+          run: |
+            set -e
+            rustc --version
+            cargo --version
+            python3.12 -c "import sqlite3, libtorrent; print('sqlite3+libtorrent ok')"
+            cargo test --workspace
+            cargo build --release
+            cargo run --release -- doctor
+            python3.12 ./bench/smoke.py --with-rasterbar
