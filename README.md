@@ -7,7 +7,7 @@ Use the terminal UI day to day, or run headless with `serve`. Same engine either
 ## Why seedchamp
 
 - **Large libraries, efficient resources** — thousands of torrents in the catalog without densifying idle ones
-- **Seedbox first** — headless serve, rate limits, watch dirs, rtorrent session import
+- **Seedbox first** — headless serve, rate limits, watch dirs, rtorrent / Transmission session import
 - **Fast I/O path** — Compio-based networking; platform-aware upload and disk backends
 - **Terminal native** — ratatui list, detail, peers, files, and activity log
 
@@ -70,6 +70,15 @@ seedchamp import rtorrent /path/to/rtorrent/session --dry-run
 ```
 
 Details: [docs/rtorrent-session.md](docs/rtorrent-session.md).
+
+**Moving from Transmission**
+
+```bash
+seedchamp import transmission ~/.config/transmission-daemon
+seedchamp import transmission /path/to/session --dry-run
+```
+
+Details: [docs/transmission-session.md](docs/transmission-session.md).
 
 ## CLI cheatsheet
 

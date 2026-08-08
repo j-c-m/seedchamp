@@ -49,7 +49,7 @@ Module map: [domains.md](domains.md). Schema: [`schema.sql`](../crates/engine/sr
 
 ## 3. Architecture
 
-**Interfaces:** TUI (default) and CLI (`serve`, `torrent …`, `import rtorrent`, `watch`, …) both drive one engine. Module boundaries: [domains.md](domains.md).
+**Interfaces:** TUI (default) and CLI (`serve`, `torrent …`, `import rtorrent|transmission`, `watch`, …) both drive one engine. Module boundaries: [domains.md](domains.md).
 
 ```mermaid
 flowchart TB
@@ -269,7 +269,7 @@ Disk path (leech writes):
 2. **Torrent detail** — files, peers, trackers, transfer
 3. **Status** (`s`) — process / engine / filesystem metrics (sampled while open)
 4. **Activity log**
-5. Import is primarily **CLI** (`seedchamp import rtorrent`); palette may expose related ops
+5. Import is primarily **CLI** (`seedchamp import rtorrent|transmission`); palette may expose related ops
 
 ### Interaction model
 
@@ -334,6 +334,8 @@ seedchamp import rtorrent ... --start-after   # mark want_start
 
 **Not imported as runtime:** rtorrent views, complex schedules, ruTorrent plugins.
 
+Transmission session import (`torrents/` + `resume/`): [transmission-session.md](transmission-session.md). CLI: `seedchamp import transmission <session_dir>`.
+
 ---
 
 ## 9. Process & Packaging
@@ -356,7 +358,7 @@ seedchamp/                # git / Cargo workspace root
 ```text
 seedchamp                 # TUI default
 seedchamp serve           # headless swarm (want_start)
-seedchamp torrent add|list|start|stop|del|recheck / import rtorrent / watch
+seedchamp torrent add|list|start|stop|del|recheck / import rtorrent|transmission / watch
 seedchamp doctor          # config, paths, catalog, effective wire identity
 seedchamp config init|show
 seedchamp bench …         # catalog microbench + harness swarm
