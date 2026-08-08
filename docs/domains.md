@@ -19,7 +19,7 @@ Domain boundaries, dependency rules, and naming. Architecture: [design.md](desig
 | Interface | Entry | Role |
 |-----------|--------|------|
 | **TUI** | `seedchamp` / `seedchamp tui` | Interactive control plane (mutations via command bus) + snapshots |
-| **CLI** | `serve`, `torrent …`, `import rtorrent\|transmission`, `watch`, `doctor`, `config`, `bench`, `version` | Non-interactive; `torrent start|stop|recheck|del` are catalog-only; swarm via `serve` / TUI |
+| **CLI** | `serve`, `torrent …`, `import\|export rtorrent\|transmission`, `watch`, `doctor`, `config`, `bench`, `version` | Non-interactive; `torrent start|stop|recheck|del` are catalog-only; swarm via `serve` / TUI |
 
 No separate seed engine vs leech engine. Activation is **`want_start`**. Incomplete torrents seed what they have; complete torrents seed only.
 

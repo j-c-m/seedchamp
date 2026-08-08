@@ -22,7 +22,7 @@ seedchamp is a BitTorrent client for large libraries. The catalog is SQLite. Onl
 1. **SQLite** holds torrents, files, bitfields, stats, peer caches, and settings.
 2. **Wire state** is per connection. Idle torrents do not hold dense per-piece tables.
 3. **Disk** is the payload authority. Seed fill uses **`[upload].backend`**. Leech writes go through **`DiskWorker`** after SHA-1. Platform ladders: [domains.md](domains.md).
-4. **Import** reads rtorrent/libtorrent session trees.
+4. **Import / export** moves torrents between the catalog and rtorrent or Transmission session trees.
 5. **TUI and CLI** share one `SessionRuntime`. Active incomplete torrents always seed what they have.
 
 **Out of scope:** WebUI, plugins, Windows parity, PEX, DHT. Trackers and optional manual peers only. Magnet / ut_metadata: [roadmap.md](roadmap.md).
@@ -41,7 +41,7 @@ Module map: [domains.md](domains.md). Schema: [`schema.sql`](../crates/engine/sr
 | Ratio | Seed-while-leech when active; always unchoke |
 | Latency | TUI from snapshots; no peer I/O on the UI thread |
 | Safety | No partial corrupt piece on disk |
-| Import | rtorrent session directory |
+| Import / export | rtorrent and Transmission session trees |
 | Crypto | MSE/PE + RC4 |
 | Upload | `[upload].backend` — [domains.md](domains.md) |
 
@@ -49,13 +49,13 @@ Module map: [domains.md](domains.md). Schema: [`schema.sql`](../crates/engine/sr
 
 ## 3. Architecture
 
-**Interfaces:** TUI (default) and CLI (`serve`, `torrent …`, `import rtorrent|transmission`, `watch`, …) both drive one engine. Module boundaries: [domains.md](domains.md).
+**Interfaces:** TUI (default) and CLI (`serve`, `torrent …`, `import|export rtorrent|transmission`, `watch`, …) both drive one engine. Module boundaries: [domains.md](domains.md).
 
 ```mermaid
 flowchart TB
   subgraph interfaces [Interfaces]
     Ratatui[TUI ratatui]
-    Cli[CLI serve torrent import watch]
+    Cli[CLI serve torrent import export watch]
   end
 
   subgraph engine [Engine]
@@ -269,7 +269,7 @@ Disk path (leech writes):
 2. **Torrent detail** — files, peers, trackers, transfer
 3. **Status** (`s`) — process / engine / filesystem metrics (sampled while open)
 4. **Activity log**
-5. Import is primarily **CLI** (`seedchamp import rtorrent|transmission`); palette may expose related ops
+5. Session import/export is primarily **CLI** (`seedchamp import|export rtorrent|transmission`); palette may expose related ops
 
 ### Interaction model
 
@@ -287,9 +287,11 @@ Disk path (leech writes):
 
 ---
 
-## 8. rtorrent Session Import
+## 8. Session import / export
 
-### Session layout (rtorrent / libtorrent)
+Move torrents between the catalog and foreign session trees. Full layouts and field maps: [rtorrent-session.md](rtorrent-session.md), [transmission-session.md](transmission-session.md).
+
+### rtorrent layout
 
 ```text
 $session/
@@ -298,9 +300,9 @@ $session/
   <INFOHASH40>.torrent.libtorrent_resume
 ```
 
-(rtorrent/libtorrent: `DownloadStorer::build_path` → `hex(infohash) + ".torrent"`.)
+Filenames use **uppercase** hex (`DownloadStorer` / `hash_string_to_hex`). Import accepts either case.
 
-### Import tool (`seedchamp import rtorrent <session_dir>`)
+### Import (`seedchamp import rtorrent <session_dir>`)
 
 | Step | Action |
 |------|--------|
@@ -308,20 +310,34 @@ $session/
 | 2 | Parse metainfo → infohash, files, piece length, hashes |
 | 3 | Parse `.libtorrent_resume` if present → bitfield, priorities, trackers extras |
 | 4 | Parse `.rtorrent` → directory, tied file, custom keys (best-effort map) |
-| 5 | Resolve data path (`directory` / `directory_base` from rtorrent object) |
-| 6 | Insert SQLite (transaction per torrent or batches) |
+| 5 | Resolve data path (`directory` / `directory_base`; strip multi-file torrent name) |
+| 6 | Insert SQLite (transaction per torrent or batches); store metainfo blob |
 | 7 | Optional: quick file existence / size check without full recheck |
 | 8 | Report summary: imported / skipped / errors |
 
-### Mapping notes
+### Export (`seedchamp export rtorrent|transmission <session_dir> --all`)
 
-| rtorrent | New catalog |
-|----------|-------------|
+| Step | Action |
+|------|--------|
+| 1 | List catalog torrents (not soft-deleted) that have a metainfo blob |
+| 2 | Write `.torrent` (exact blob) + client resume/sidecar |
+| 3 | Map `data_root`, stats, priorities, `want_start` (rtorrent `state` / Transmission `paused`) |
+| 4 | Multi-file: re-append torrent name on rtorrent `directory` (inverse of import strip) |
+| 5 | Incomplete: rtorrent piece bitfield when present; Transmission always `progress` = `none` (no block map) |
+| 6 | Overwrite same-infohash files; report written / skipped / errors |
+
+Requires stored metainfo blobs. Stop the target client before writing into a live session dir.
+
+### Mapping notes (rtorrent)
+
+| rtorrent | Catalog |
+|----------|---------|
 | bitfield / completed chunks | `bitfield` + `complete` |
-| `directory` | `meta_path.data_root` |
+| `directory` | `meta_path.data_root` (strip/re-append multi-file name) |
 | uploaded/downloaded | `stats` |
 | trackers | `tracker` |
 | file priorities | `torrent_file.priority` |
+| `state` (export) | `want_start` (`1` / `0`) |
 | throttle groups | not imported |
 
 **CLI:**
@@ -330,11 +346,13 @@ $session/
 seedchamp import rtorrent /path/to/rtorrent/session --db ~/.local/share/seedchamp/catalog.sqlite
 seedchamp import rtorrent ... --dry-run
 seedchamp import rtorrent ... --start-after   # mark want_start
+seedchamp export rtorrent /path/to/session --all
+seedchamp export transmission /path/to/session --all
 ```
 
 **Not imported as runtime:** rtorrent views, complex schedules, ruTorrent plugins.
 
-Transmission session import (`torrents/` + `resume/`): [transmission-session.md](transmission-session.md). CLI: `seedchamp import transmission <session_dir>`.
+Transmission: [transmission-session.md](transmission-session.md). CLI: `seedchamp import|export transmission …`.
 
 ---
 
@@ -348,7 +366,7 @@ seedchamp/                # git / Cargo workspace root
   crates/
     engine/               # protocol, disk, catalog
     tui/                  # ratatui
-    import/               # rtorrent session import
+    import/               # rtorrent / Transmission session import + export
   src/main.rs             # seedchamp binary (clap subcommands)
   docs/
 ```
@@ -358,7 +376,7 @@ seedchamp/                # git / Cargo workspace root
 ```text
 seedchamp                 # TUI default
 seedchamp serve           # headless swarm (want_start)
-seedchamp torrent add|list|start|stop|del|recheck / import rtorrent|transmission / watch
+seedchamp torrent add|list|start|stop|del|recheck / import|export rtorrent|transmission / watch
 seedchamp doctor          # config, paths, catalog, effective wire identity
 seedchamp config init|show
 seedchamp bench …         # catalog microbench + harness swarm

@@ -16,7 +16,8 @@ use seedchamp_engine::{
     Config, RuntimeConfig, UploadBackend, UploadOptions, WatchCallback,
 };
 use seedchamp_import::{
-    import_session_with, import_transmission_with, ImportOptions, ImportReport,
+    export_rtorrent_all, export_transmission_all, import_session_with, import_transmission_with,
+    ExportReport, ImportOptions, ImportReport,
 };
 
 #[derive(Parser, Debug)]
@@ -54,6 +55,11 @@ enum Commands {
     Import {
         #[command(subcommand)]
         action: ImportCmd,
+    },
+    /// Export catalog torrents into client session directories.
+    Export {
+        #[command(subcommand)]
+        action: ExportCmd,
     },
     /// Check catalog, config, and paths.
     Doctor,
@@ -108,6 +114,32 @@ enum ImportCmd {
         /// Fallback data root when resume has no destination (default: config paths.data_root).
         #[arg(long)]
         data_root: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ExportCmd {
+    /// Export catalog into a flat rtorrent session directory.
+    Rtorrent {
+        /// Destination session directory (created if needed).
+        session_dir: PathBuf,
+        /// Export all catalog torrents (required).
+        #[arg(long)]
+        all: bool,
+        /// Count only; do not write files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Export catalog into a Transmission config root (torrents/ + resume/).
+    Transmission {
+        /// Destination config/session directory (created if needed).
+        session_dir: PathBuf,
+        /// Export all catalog torrents (required).
+        #[arg(long)]
+        all: bool,
+        /// Count only; do not write files.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -365,6 +397,36 @@ fn run(cli: Cli) -> seedchamp_engine::Result<()> {
                 }
             }
         },
+        Commands::Export { action } => match action {
+            ExportCmd::Rtorrent {
+                session_dir,
+                all,
+                dry_run,
+            } => {
+                if !all {
+                    return Err(seedchamp_engine::Error::Msg(
+                        "export rtorrent requires --all".into(),
+                    ));
+                }
+                let report = export_rtorrent_all(&db, &session_dir, dry_run)?;
+                print_export_report("rtorrent", &report);
+                Ok(())
+            }
+            ExportCmd::Transmission {
+                session_dir,
+                all,
+                dry_run,
+            } => {
+                if !all {
+                    return Err(seedchamp_engine::Error::Msg(
+                        "export transmission requires --all".into(),
+                    ));
+                }
+                let report = export_transmission_all(&db, &session_dir, dry_run)?;
+                print_export_report("transmission", &report);
+                Ok(())
+            }
+        },
         Commands::Doctor => doctor(&db, &cfg, &cfg_path),
         Commands::Serve => serve_cmd(&db, &cfg),
         Commands::Bench { action } => match action {
@@ -475,6 +537,19 @@ fn print_import_report(kind: &str, report: &ImportReport) {
             "  note: no upload/download totals found in session sidecars (check path / resume files)"
         );
     }
+    for e in &report.errors {
+        eprintln!("  error: {e}");
+    }
+}
+
+fn print_export_report(kind: &str, report: &ExportReport) {
+    println!(
+        "export {kind}: candidates={} written={} skipped={} errors={}",
+        report.candidates,
+        report.written,
+        report.skipped,
+        report.errors.len()
+    );
     for e in &report.errors {
         eprintln!("  error: {e}");
     }
