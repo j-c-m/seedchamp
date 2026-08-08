@@ -32,3 +32,14 @@ seedchamp import transmission ~/.config/transmission-daemon
 seedchamp import transmission /path/to/session --dry-run
 seedchamp import transmission /path/to/session --start-after --data-root ~/downloads
 ```
+
+## Export
+
+Write the catalog into a Transmission-style config root (`torrents/` + `resume/`, overwrites same infohash):
+
+```bash
+seedchamp export transmission /path/to/session --all
+seedchamp export transmission /path/to/session --all --dry-run
+```
+
+Does not write `settings.json`. Incomplete torrents always export `progress.blocks`/`pieces` as `none` (block maps are not reconstructed from the catalog bitfield — recheck in Transmission). Complete torrents use `all`. Stop Transmission before writing into a live config dir.

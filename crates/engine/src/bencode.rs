@@ -1,4 +1,4 @@
-//! Minimal bencode decoder with raw-slice support for infohash.
+//! Minimal bencode codec with raw-slice support for infohash.
 
 use std::collections::BTreeMap;
 
@@ -204,6 +204,55 @@ fn decode_dict(input: &[u8], i: &mut usize) -> Result<Value> {
     Ok(Value::Dict(map))
 }
 
+/// Encode a value to bencode bytes. Dict keys are written in sorted order.
+pub fn encode(value: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_into(value, &mut out);
+    out
+}
+
+fn encode_into(value: &Value, out: &mut Vec<u8>) {
+    match value {
+        Value::Int(n) => {
+            out.push(b'i');
+            out.extend_from_slice(n.to_string().as_bytes());
+            out.push(b'e');
+        }
+        Value::Bytes(b) => {
+            out.extend_from_slice(b.len().to_string().as_bytes());
+            out.push(b':');
+            out.extend_from_slice(b);
+        }
+        Value::List(items) => {
+            out.push(b'l');
+            for item in items {
+                encode_into(item, out);
+            }
+            out.push(b'e');
+        }
+        Value::Dict(map) => {
+            out.push(b'd');
+            for (k, v) in map {
+                // keys already sorted in BTreeMap
+                out.extend_from_slice(k.len().to_string().as_bytes());
+                out.push(b':');
+                out.extend_from_slice(k);
+                encode_into(v, out);
+            }
+            out.push(b'e');
+        }
+    }
+}
+
+/// Build a dict from string keys (UTF-8).
+pub fn dict_from_str_keys(pairs: impl IntoIterator<Item = (String, Value)>) -> Value {
+    let mut map = BTreeMap::new();
+    for (k, v) in pairs {
+        map.insert(k.into_bytes(), v);
+    }
+    Value::Dict(map)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +279,22 @@ mod tests {
         let raw = b"d4:infod4:name3:fooee";
         let info = find_raw_dict_value(raw, b"info").unwrap();
         assert_eq!(info, b"d4:name3:fooe");
+    }
+
+    #[test]
+    fn encode_roundtrip() {
+        let v = dict_from_str_keys([
+            ("foo".into(), Value::Bytes(b"bar".to_vec())),
+            ("n".into(), Value::Int(-3)),
+            (
+                "l".into(),
+                Value::List(vec![Value::Int(1), Value::Bytes(b"x".to_vec())]),
+            ),
+        ]);
+        let enc = encode(&v);
+        let dec = decode_full(&enc).unwrap();
+        assert_eq!(dec, v);
+        // keys sorted: foo, l, n
+        assert_eq!(&enc[..], b"d3:foo3:bar1:lli1e1:xe1:ni-3ee");
     }
 }

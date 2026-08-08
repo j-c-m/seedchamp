@@ -7,7 +7,7 @@ Use the terminal UI day to day, or run headless with `serve`. Same engine either
 ## Why seedchamp
 
 - **Large libraries, efficient resources** — thousands of torrents in the catalog without densifying idle ones
-- **Seedbox first** — headless serve, rate limits, watch dirs, rtorrent / Transmission session import
+- **Seedbox first** — headless serve, rate limits, watch dirs, rtorrent / Transmission session import and export
 - **Fast I/O path** — Compio-based networking; platform-aware upload and disk backends
 - **Terminal native** — ratatui list, detail, peers, files, and activity log
 
@@ -80,6 +80,13 @@ seedchamp import transmission /path/to/session --dry-run
 
 Details: [docs/transmission-session.md](docs/transmission-session.md).
 
+**Export session** (catalog → client session tree; requires `--all`):
+
+```bash
+seedchamp export rtorrent /path/to/session --all
+seedchamp export transmission /path/to/session --all
+```
+
 ## CLI cheatsheet
 
 ```bash
@@ -91,6 +98,11 @@ seedchamp torrent stop  <id-or-infohash-prefix>
 seedchamp torrent del   <id-or-infohash-prefix>
 seedchamp torrent recheck <id-or-infohash-prefix>
 seedchamp torrent --json list
+
+seedchamp import rtorrent /path/to/session
+seedchamp import transmission ~/.config/transmission-daemon
+seedchamp export rtorrent /path/to/session --all
+seedchamp export transmission /path/to/session --all
 
 seedchamp config show
 seedchamp doctor
@@ -119,7 +131,8 @@ The init template covers paths, peer limits, upload/disk backends, watch dirs, r
 | [docs/design.md](docs/design.md) | Architecture |
 | [docs/domains.md](docs/domains.md) | Modules and I/O |
 | [docs/roadmap.md](docs/roadmap.md) | Open work |
-| [docs/rtorrent-session.md](docs/rtorrent-session.md) | rtorrent import |
+| [docs/rtorrent-session.md](docs/rtorrent-session.md) | rtorrent import / export |
+| [docs/transmission-session.md](docs/transmission-session.md) | Transmission import / export |
 | [bench/README.md](bench/README.md) | Smoke and throughput harness |
 
 ## Development

@@ -2,7 +2,7 @@
 name = "seedchamp-import"
 version = "1.0.0"
 edition = "2021"
-description = "Import rtorrent session directories into seedchamp catalog"
+description = "Import/export rtorrent and Transmission session trees for seedchamp"
 license = "MIT"
 
 [lints]

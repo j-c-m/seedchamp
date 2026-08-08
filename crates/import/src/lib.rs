@@ -1,4 +1,4 @@
-//! Session importers: rtorrent and Transmission.
+//! Session import/export: rtorrent and Transmission.
 //!
 //! rtorrent layout:
 //!   `<INFOHASH40>.torrent`
@@ -12,11 +12,13 @@
 #![forbid(unsafe_code)]
 
 mod common;
+mod export;
 mod resume;
 mod rtorrent_side;
 mod session;
 mod transmission;
 
 pub use common::{ImportOptions, ImportReport};
+pub use export::{export_rtorrent_all, export_transmission_all, ExportReport};
 pub use session::{import_session, import_session_with};
 pub use transmission::{import_transmission, import_transmission_with};
