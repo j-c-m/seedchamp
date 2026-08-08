@@ -1,4 +1,4 @@
-//! Scan rtorrent session directory and import torrents.
+//! Scan Transmission session root (`torrents/` + `resume/`) and import.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,12 +9,18 @@ use crate::common::{
     file_mtime_unix, is_infohash_torrent_name, strip_trailing_torrent_name, ImportOptions,
     ImportReport,
 };
-use crate::resume::parse_resume;
-use crate::rtorrent_side::parse_rtorrent;
+use crate::transmission::resume::parse_transmission_resume;
 
-/// Import an rtorrent session directory into the catalog at `db_path`.
-pub fn import_session(session_dir: &Path, db_path: &Path, dry_run: bool) -> Result<ImportReport> {
-    import_session_with(
+/// Import a Transmission config/session directory into the catalog at `db_path`.
+///
+/// Expects `session_dir/torrents/*.torrent` and optional matching
+/// `session_dir/resume/{infohash}.resume`.
+pub fn import_transmission(
+    session_dir: &Path,
+    db_path: &Path,
+    dry_run: bool,
+) -> Result<ImportReport> {
+    import_transmission_with(
         session_dir,
         db_path,
         ImportOptions {
@@ -24,7 +30,7 @@ pub fn import_session(session_dir: &Path, db_path: &Path, dry_run: bool) -> Resu
     )
 }
 
-pub fn import_session_with(
+pub fn import_transmission_with(
     session_dir: &Path,
     db_path: &Path,
     opts: ImportOptions,
@@ -33,11 +39,20 @@ pub fn import_session_with(
         return Err(format!("not a directory: {}", session_dir.display()).into());
     }
 
+    let torrents_dir = session_dir.join("torrents");
+    if !torrents_dir.is_dir() {
+        return Err(format!(
+            "transmission session missing torrents/: {}",
+            torrents_dir.display()
+        )
+        .into());
+    }
+
+    let resume_dir = session_dir.join("resume");
     let mut report = ImportReport::default();
-    let entries = fs::read_dir(session_dir)?;
 
     let mut torrent_paths: Vec<PathBuf> = Vec::new();
-    for ent in entries {
+    for ent in fs::read_dir(&torrents_dir)? {
         let ent = ent?;
         let name = ent.file_name();
         let name = name.to_string_lossy();
@@ -46,17 +61,12 @@ pub fn import_session_with(
         }
     }
     torrent_paths.sort();
-
     report.scanned = torrent_paths.len() as u32;
 
     if opts.dry_run {
         for p in &torrent_paths {
             match Metainfo::parse_file(p) {
-                Ok(m) => {
-                    // count as would-import
-                    let _ = m;
-                    report.imported += 1;
-                }
+                Ok(_) => report.imported += 1,
                 Err(e) => {
                     report.errors.push(format!("{}: {e}", p.display()));
                     report.skipped += 1;
@@ -69,7 +79,7 @@ pub fn import_session_with(
     let mut catalog = Catalog::open(db_path)?;
 
     for torrent_path in torrent_paths {
-        match import_one(&mut catalog, &torrent_path, &opts) {
+        match import_one(&mut catalog, &torrent_path, &resume_dir, &opts) {
             Ok(r) => {
                 match r.kind {
                     ImportOneKind::Inserted => report.imported += 1,
@@ -109,40 +119,45 @@ struct ImportOneResult {
     downloaded: u64,
 }
 
+fn find_resume_path(resume_dir: &Path, infohash_hex: &str) -> Option<PathBuf> {
+    if !resume_dir.is_dir() {
+        return None;
+    }
+    let lower = infohash_hex.to_ascii_lowercase();
+    let upper = infohash_hex.to_ascii_uppercase();
+    for stem in [&lower, &upper, infohash_hex] {
+        for name in [format!("{stem}.resume"), format!("{stem}.torrent.resume")] {
+            let p = resume_dir.join(&name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 fn import_one(
     catalog: &mut Catalog,
     torrent_path: &Path,
+    resume_dir: &Path,
     opts: &ImportOptions,
 ) -> Result<ImportOneResult> {
     let torrent_bytes = fs::read(torrent_path)
         .map_err(|e| seedchamp_engine::Error::Path(torrent_path.to_path_buf(), e.to_string()))?;
     let metainfo = Metainfo::parse_bytes(&torrent_bytes)?;
-    let base = torrent_path.to_string_lossy();
-    // sidecars: file.torrent.rtorrent and file.torrent.libtorrent_resume
-    // our files are named HASH.torrent so sidecars are HASH.torrent.rtorrent
-    let rtorrent_path = PathBuf::from(format!("{base}.rtorrent"));
-    let resume_path = PathBuf::from(format!("{base}.libtorrent_resume"));
+    let ih = metainfo.infohash_hex();
 
-    let side = if rtorrent_path.is_file() {
-        let bytes = fs::read(&rtorrent_path)?;
-        parse_rtorrent(&bytes).unwrap_or_default()
+    let tr = if let Some(rp) = find_resume_path(resume_dir, &ih) {
+        let bytes = fs::read(&rp)?;
+        parse_transmission_resume(&bytes, metainfo.piece_count).unwrap_or_default()
     } else {
         Default::default()
     };
 
-    let resume = if resume_path.is_file() {
-        let bytes = fs::read(&resume_path)?;
-        parse_resume(&bytes, metainfo.piece_count).unwrap_or_default()
-    } else {
-        Default::default()
-    };
-
-    let mut data_root = side
-        .data_root()
+    let mut data_root = tr
+        .data_root
+        .clone()
         .unwrap_or_else(|| opts.default_data_root.clone());
-    // rtorrent `d.directory.set` appends the torrent name for multi-file, so the
-    // session `directory` key is already `…/TorrentName`. Our metainfo paths also
-    // include `name/` — strip the trailing name so we do not double-nest.
     if metainfo.is_multi_file {
         data_root = strip_trailing_torrent_name(&data_root, &metainfo.name);
     }
@@ -150,27 +165,21 @@ fn import_one(
     let mut ins = TorrentInsert::from_metainfo(metainfo, data_root);
     ins.metainfo_blob = Some(torrent_bytes);
     ins.source_torrent = Some(torrent_path.display().to_string());
-    ins.complete = resume.complete;
-    ins.have_count = resume.have_count;
-    ins.bitfield = resume.bitfield;
-    // Lifetime totals live in `.rtorrent` as total_uploaded / total_downloaded
-    // (libtorrent_resume usually has no uploaded/downloaded keys).
-    ins.uploaded = side.total_uploaded.unwrap_or(0).max(resume.uploaded);
-    ins.downloaded = side.total_downloaded.unwrap_or(0).max(resume.downloaded);
-    ins.file_priorities = resume.file_priorities;
-
-    // created_at: rtorrent timestamps, else session file mtime (not "import now").
-    ins.created_at = side
-        .created_at_hint()
-        .or_else(|| file_mtime_unix(torrent_path));
+    ins.complete = tr.complete;
+    ins.have_count = tr.have_count;
+    ins.bitfield = tr.bitfield;
+    ins.uploaded = tr.uploaded;
+    ins.downloaded = tr.downloaded;
+    ins.file_priorities = tr.file_priorities;
+    ins.created_at = tr.created_at.or_else(|| file_mtime_unix(torrent_path));
 
     if ins.complete {
         ins.state = "stopped".into();
-        ins.finished_at = side
-            .finished_at_hint()
+        ins.finished_at = tr
+            .finished_at
             .or(ins.created_at)
             .or_else(|| Some(TorrentInsert::now_unix()));
-    } else if let Some(fin) = side.finished_at_hint() {
+    } else if let Some(fin) = tr.finished_at {
         ins.finished_at = Some(fin);
     }
 
@@ -178,8 +187,6 @@ fn import_one(
         ins.want_start = true;
         ins.state = "started".into();
     }
-    // Stable announce key from session, or generate on insert.
-    ins.tracker_key = side.key.filter(|&k| k != 0);
 
     let uploaded = ins.uploaded;
     let downloaded = ins.downloaded;
@@ -190,9 +197,6 @@ fn import_one(
             uploaded,
             downloaded,
         }),
-        // Soft-deleted same infohash: insert_torrent already cleared deleted.
-        // Refresh stats/priorities like a normal re-import, count as inserted
-        // so the client shows up again.
         InsertOutcome::Restored { id } => {
             catalog.update_import_meta(
                 id,
@@ -201,13 +205,7 @@ fn import_one(
                 Some(ins.uploaded),
                 Some(ins.downloaded),
             )?;
-            if let Some(k) = side.key.filter(|&k| k != 0) {
-                if catalog.tracker_key(id).unwrap_or(0) == 0 {
-                    let _ = catalog.set_tracker_key(id, k);
-                }
-            } else {
-                let _ = catalog.ensure_tracker_key(id);
-            }
+            let _ = catalog.ensure_tracker_key(id);
             if !ins.file_priorities.is_empty() {
                 catalog.set_file_priorities(id, &ins.file_priorities)?;
             }
@@ -221,7 +219,6 @@ fn import_one(
             })
         }
         InsertOutcome::Exists { id } => {
-            // Re-import refreshes timestamps/stats (and never lowers totals).
             catalog.update_import_meta(
                 id,
                 ins.created_at,
@@ -229,19 +226,10 @@ fn import_one(
                 Some(ins.uploaded),
                 Some(ins.downloaded),
             )?;
-            // If catalog key is still zero, apply the session key.
-            if let Some(k) = side.key.filter(|&k| k != 0) {
-                if catalog.tracker_key(id).unwrap_or(0) == 0 {
-                    let _ = catalog.set_tracker_key(id, k);
-                }
-            } else {
-                let _ = catalog.ensure_tracker_key(id);
-            }
-            // File on/off from resume (0=off, ≥1=on).
+            let _ = catalog.ensure_tracker_key(id);
             if !ins.file_priorities.is_empty() {
                 catalog.set_file_priorities(id, &ins.file_priorities)?;
             }
-            // Backfill original .torrent bytes if missing (or refresh).
             if let Some(ref blob) = ins.metainfo_blob {
                 let _ = catalog.set_metainfo_blob(id, blob);
             }
@@ -259,11 +247,7 @@ mod tests {
     use super::*;
     use seedchamp_engine::Metainfo;
 
-    #[test]
-    fn dry_run_and_import_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        // Build minimal torrent file with fixed name matching infohash after parse —
-        // session names don't have to match infohash for import; only pattern.
+    fn sample_torrent_bytes() -> Vec<u8> {
         let pieces = vec![0u8; 20];
         let mut info = Vec::new();
         info.extend_from_slice(b"d6:lengthi1e4:name4:test12:piece lengthi16384e6:pieces20:");
@@ -273,28 +257,36 @@ mod tests {
         root.extend_from_slice(b"d8:announce8:http://x4:info");
         root.extend_from_slice(&info);
         root.extend_from_slice(b"e");
+        root
+    }
 
+    #[test]
+    fn transmission_layout_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let torrents = dir.path().join("torrents");
+        let resume = dir.path().join("resume");
+        fs::create_dir_all(&torrents).unwrap();
+        fs::create_dir_all(&resume).unwrap();
+
+        let root = sample_torrent_bytes();
         let m = Metainfo::parse_bytes(&root).unwrap();
-        let name = format!("{}.torrent", m.infohash_hex().to_uppercase());
-        let tpath = dir.path().join(&name);
-        std::fs::write(&tpath, &root).unwrap();
+        let ih = m.infohash_hex();
+        let tpath = torrents.join(format!("{}.torrent", ih.to_ascii_lowercase()));
+        fs::write(&tpath, &root).unwrap();
 
-        // resume: complete bitfield as integer
-        let resume = b"d8:bitfieldi1e8:uploadedi100e10:downloadedi0ee";
-        std::fs::write(dir.path().join(format!("{name}.libtorrent_resume")), resume).unwrap();
+        let benc = b"d11:destination3:/dl10:added-datei1700000000e9:done-datei1700000500e10:downloadedi50e8:uploadedi200e6:pausedi1e8:progressd6:blocks3:all6:pieces3:allee";
+        fs::write(resume.join(format!("{ih}.resume")), benc).unwrap();
 
-        // rtorrent directory + timestamps (created_at / finished_at)
-        let rtorrent = b"d9:directory3:/dl17:timestamp.startedi1700000000e18:timestamp.finishedi1700000500e14:total_uploadedi77e16:total_downloadedi0ee";
-        std::fs::write(dir.path().join(format!("{name}.rtorrent")), rtorrent).unwrap();
-
-        let report = import_session(dir.path(), &dir.path().join("x.sqlite"), true).unwrap();
+        let report = import_transmission(dir.path(), &dir.path().join("x.sqlite"), true).unwrap();
         assert_eq!(report.scanned, 1);
         assert_eq!(report.imported, 1);
 
         let db = dir.path().join("cat.sqlite");
-        let report = import_session(dir.path(), &db, false).unwrap();
+        let report = import_transmission(dir.path(), &db, false).unwrap();
         assert_eq!(report.imported, 1);
         assert_eq!(report.errors.len(), 0);
+        assert_eq!(report.uploaded_bytes, 200);
+        assert_eq!(report.with_transfer_stats, 1);
 
         let cat = Catalog::open(&db).unwrap();
         let list = cat.list_torrents().unwrap();
@@ -303,24 +295,18 @@ mod tests {
         assert!(list[0].complete);
         assert_eq!(list[0].data_root.as_deref(), Some("/dl"));
         assert_eq!(list[0].created_at, 1_700_000_000);
-        // resume uploaded=100, rtorrent total_uploaded=77 → max = 100
-        assert_eq!(list[0].uploaded, 100);
-        assert_eq!(report.uploaded_bytes, 100);
-        assert_eq!(report.with_transfer_stats, 1);
-        let blob = cat.get_metainfo_blob(list[0].id).unwrap();
-        assert!(blob.is_some());
-        assert_eq!(blob.unwrap(), root);
+        assert_eq!(list[0].uploaded, 200);
 
-        // second import: exists + refreshes metadata
-        let report2 = import_session(dir.path(), &db, false).unwrap();
+        let report2 = import_transmission(dir.path(), &db, false).unwrap();
         assert_eq!(report2.skipped, 1);
         assert_eq!(report2.updated, 1);
         assert_eq!(report2.imported, 0);
-        assert_eq!(report2.uploaded_bytes, 100);
+    }
 
-        let cat = Catalog::open(&db).unwrap();
-        let list = cat.list_torrents().unwrap();
-        assert_eq!(list[0].created_at, 1_700_000_000);
-        assert_eq!(list[0].uploaded, 100);
+    #[test]
+    fn missing_torrents_dir_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = import_transmission(dir.path(), &dir.path().join("x.sqlite"), true).unwrap_err();
+        assert!(err.to_string().contains("torrents"));
     }
 }

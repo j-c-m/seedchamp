@@ -15,7 +15,9 @@ use seedchamp_engine::{
     spawn_watcher, to_toml_string, tracker_user_agent, write_config_template, AddOptions, Catalog,
     Config, RuntimeConfig, UploadBackend, UploadOptions, WatchCallback,
 };
-use seedchamp_import::{import_session_with, ImportOptions};
+use seedchamp_import::{
+    import_session_with, import_transmission_with, ImportOptions, ImportReport,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -90,6 +92,20 @@ enum ImportCmd {
         #[arg(long)]
         start_after: bool,
         /// Fallback data root when .rtorrent has no directory (default: config paths.data_root).
+        #[arg(long)]
+        data_root: Option<String>,
+    },
+    /// Import a Transmission session (config root with torrents/ + resume/).
+    Transmission {
+        /// Path to Transmission config/session directory.
+        session_dir: PathBuf,
+        /// Parse only; do not write.
+        #[arg(long)]
+        dry_run: bool,
+        /// Mark imported torrents want_start / started.
+        #[arg(long)]
+        start_after: bool,
+        /// Fallback data root when resume has no destination (default: config paths.data_root).
         #[arg(long)]
         data_root: Option<String>,
     },
@@ -321,29 +337,28 @@ fn run(cli: Cli) -> seedchamp_engine::Result<()> {
                 };
                 match import_session_with(&session_dir, &db, opts) {
                     Ok(report) => {
-                        println!(
-                            "import rtorrent: scanned={} imported={} skipped={} updated={} errors={}",
-                            report.scanned,
-                            report.imported,
-                            report.skipped,
-                            report.updated,
-                            report.errors.len()
-                        );
-                        println!(
-                            "  transfer totals from session: up={} down={} ({} torrent(s) with non-zero)",
-                            report.uploaded_bytes,
-                            report.downloaded_bytes,
-                            report.with_transfer_stats
-                        );
-                        if report.with_transfer_stats == 0 && report.scanned > 0 {
-                            eprintln!(
-                                "  note: no total_uploaded/total_downloaded found in .rtorrent sidecars\n\
-                                 \t(libtorrent_resume usually has no up/down keys; check session path)"
-                            );
-                        }
-                        for e in report.errors {
-                            eprintln!("  error: {e}");
-                        }
+                        print_import_report("rtorrent", &report);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            ImportCmd::Transmission {
+                session_dir,
+                dry_run,
+                start_after,
+                data_root,
+            } => {
+                let data_root =
+                    data_root.unwrap_or_else(|| cfg.paths.data_root.display().to_string());
+                let opts = ImportOptions {
+                    dry_run,
+                    start_after,
+                    default_data_root: data_root,
+                };
+                match import_transmission_with(&session_dir, &db, opts) {
+                    Ok(report) => {
+                        print_import_report("transmission", &report);
                         Ok(())
                     }
                     Err(e) => Err(e),
@@ -440,6 +455,29 @@ fn ensure_parent_dir(path: &std::path::Path) -> seedchamp_engine::Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_import_report(kind: &str, report: &ImportReport) {
+    println!(
+        "import {kind}: scanned={} imported={} skipped={} updated={} errors={}",
+        report.scanned,
+        report.imported,
+        report.skipped,
+        report.updated,
+        report.errors.len()
+    );
+    println!(
+        "  transfer totals from session: up={} down={} ({} torrent(s) with non-zero)",
+        report.uploaded_bytes, report.downloaded_bytes, report.with_transfer_stats
+    );
+    if report.with_transfer_stats == 0 && report.scanned > 0 {
+        eprintln!(
+            "  note: no upload/download totals found in session sidecars (check path / resume files)"
+        );
+    }
+    for e in &report.errors {
+        eprintln!("  error: {e}");
+    }
 }
 
 fn serve_cmd(db: &std::path::Path, cfg: &Config) -> seedchamp_engine::Result<()> {
