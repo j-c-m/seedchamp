@@ -1,0 +1,14 @@
+[package]
+name = "seedchamp-tui"
+version = "1.0.0"
+edition = "2021"
+description = "ratatui front-end for seedchamp"
+license = "MIT"
+
+[dependencies]
+seedchamp-engine = { path = "../engine" }
+ratatui = "0.30"
+crossterm = "0.29"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+tracing = "0.1"

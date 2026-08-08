@@ -1,0 +1,13 @@
+[package]
+name = "seedchamp-import"
+version = "1.0.0"
+edition = "2021"
+description = "Import rtorrent session directories into seedchamp catalog"
+license = "MIT"
+
+[dependencies]
+seedchamp-engine = { path = "../engine" }
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
