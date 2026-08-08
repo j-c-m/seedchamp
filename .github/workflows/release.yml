@@ -1,0 +1,250 @@
+# Tag release: Linux / macOS (aarch64) / FreeBSD 15.1 binaries + source tarball.
+#
+# Tag form: v{CARGO_PKG_VERSION}-{7-char-sha}
+#   e.g. v1.0.0-72279ee  (runtime VERSION is 1.0.0-72279ee without the leading v)
+#
+#   git tag "v${PKG}-$(git rev-parse --short=7 HEAD)"
+#   git push origin "v${PKG}-$(git rev-parse --short=7 HEAD)"
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*-*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      ver: ${{ steps.meta.outputs.ver }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: meta
+        name: Validate tag and emit version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9a-f]+)$ ]]; then
+            echo "Tag must match vMAJOR.MINOR.PATCH-hexsha (got: $TAG)"
+            exit 1
+          fi
+          PKG="${BASH_REMATCH[1]}"
+          TAG_SHA="${BASH_REMATCH[2]}"
+          HEAD_SHA="$(git rev-parse --short=7 HEAD)"
+          if [[ "$TAG_SHA" != "$HEAD_SHA" ]]; then
+            echo "Tag SHA $TAG_SHA does not match commit short SHA $HEAD_SHA"
+            exit 1
+          fi
+          # workspace.package.version
+          CARGO_VER="$(awk '
+            $0 == "[workspace.package]" { in_wp=1; next }
+            in_wp && /^\[/ { exit }
+            in_wp && $1 == "version" {
+              gsub(/"/, "", $3); print $3; exit
+            }
+          ' Cargo.toml)"
+          if [[ -z "$CARGO_VER" ]]; then
+            echo "Could not read workspace.package.version from Cargo.toml"
+            exit 1
+          fi
+          if [[ "$PKG" != "$CARGO_VER" ]]; then
+            echo "Tag package version $PKG != Cargo.toml $CARGO_VER"
+            exit 1
+          fi
+          VER="${PKG}-${HEAD_SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          echo "OK tag=$TAG ver=$VER"
+
+  build-linux:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked || cargo build --release
+      - name: Stage binary
+        run: |
+          set -euo pipefail
+          VER="${{ needs.validate.outputs.ver }}"
+          mkdir -p dist
+          cp target/release/seedchamp "dist/seedchamp-${VER}-linux-x86_64"
+          chmod +x "dist/seedchamp-${VER}-linux-x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  build-macos:
+    needs: [validate]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked || cargo build --release
+      - name: Stage binary
+        run: |
+          set -euo pipefail
+          VER="${{ needs.validate.outputs.ver }}"
+          mkdir -p dist
+          cp target/release/seedchamp "dist/seedchamp-${VER}-macos-aarch64"
+          chmod +x "dist/seedchamp-${VER}-macos-aarch64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
+          path: dist/*
+          if-no-files-found: error
+
+  build-freebsd:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build release in FreeBSD 15.1 VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          usesh: true
+          prepare: |
+            pkg install -y rust git pkgconf
+          run: |
+            set -e
+            rustc --version
+            cargo --version
+            cargo build --release --locked || cargo build --release
+            test -x target/release/seedchamp
+      - name: Stage binary
+        run: |
+          set -euo pipefail
+          VER="${{ needs.validate.outputs.ver }}"
+          mkdir -p dist
+          cp target/release/seedchamp "dist/seedchamp-${VER}-freebsd-15.1-amd64"
+          chmod +x "dist/seedchamp-${VER}-freebsd-15.1-amd64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freebsd-15.1-amd64
+          path: dist/*
+          if-no-files-found: error
+
+  source:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: git archive
+        run: |
+          set -euo pipefail
+          VER="${{ needs.validate.outputs.ver }}"
+          mkdir -p dist
+          git archive --format=tar.gz \
+            --prefix="seedchamp-${VER}/" \
+            -o "dist/seedchamp-${VER}-src.tar.gz" \
+            HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [validate, build-linux, build-macos, build-freebsd, source]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble dist + checksums
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f -exec cp -v {} dist/ \;
+          cd dist
+          sha256sum * | tee sha256sums.txt
+          ls -la
+
+      - name: Build release notes (changelog + GitHub notes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.validate.outputs.tag }}"
+          VER="${{ needs.validate.outputs.ver }}"
+          PREV="$(git tag -l 'v*' --sort=-creatordate | grep -vxF "$TAG" | head -n1 || true)"
+
+          {
+            echo "## Changelog"
+            echo
+            if [[ -n "$PREV" ]]; then
+              echo "Commits since \`${PREV}\`:"
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREV}..HEAD"
+              echo
+              echo
+            else
+              echo "First tagged release (full history):"
+              echo
+              git log --pretty=format:'- %s (%h)' HEAD
+              echo
+              echo
+            fi
+
+            echo "## What's Changed"
+            echo
+            # GitHub auto notes (PRs / contributors when available).
+            API_ARGS=( -f tag_name="$TAG" -f target_commitish="${{ github.sha }}" )
+            if [[ -n "$PREV" ]]; then
+              API_ARGS+=( -f previous_tag_name="$PREV" )
+            fi
+            NOTES_JSON="$(gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/releases/generate-notes" \
+              "${API_ARGS[@]}")"
+            echo "$NOTES_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")'
+            echo
+
+            echo "## Assets"
+            echo
+            echo "Binaries and source for \`${VER}\` (see also \`sha256sums.txt\`):"
+            echo
+            echo "- \`seedchamp-${VER}-linux-x86_64\`"
+            echo "- \`seedchamp-${VER}-macos-aarch64\`"
+            echo "- \`seedchamp-${VER}-freebsd-15.1-amd64\`"
+            echo "- \`seedchamp-${VER}-src.tar.gz\`"
+          } > RELEASE_NOTES.md
+
+          # Keep notes readable in the log
+          cat RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.validate.outputs.tag }}"
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --notes-file RELEASE_NOTES.md
