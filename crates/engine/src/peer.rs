@@ -363,7 +363,7 @@ mod tests {
         std::fs::write(seed_dir.path().join("f"), &data).unwrap();
         let hashes = piece_hashes(&data, piece_length);
         let ih = [0xABu8; 20];
-        let piece_count = (data.len() as u32 + piece_length - 1) / piece_length;
+        let piece_count = (data.len() as u32).div_ceil(piece_length);
         let layout_seed = crate::disk::StorageLayout {
             data_root: seed_dir.path().to_path_buf(),
             piece_length,

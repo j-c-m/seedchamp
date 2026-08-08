@@ -351,7 +351,7 @@ mod tests {
         let _ = adapt_pipeline(&mut st, bytes, t, &tuning);
         // Smooth should be between steady and spike, not equal to spike alone.
         assert!(st.smooth_bps > steady);
-        assert!(st.smooth_bps < 5_000_000 / 1); // not pure 10 MB/s from 0.5s of 5MB
+        assert!(st.smooth_bps < 5_000_000); // not pure 10 MB/s from 0.5s of 5MB
         assert!(
             st.smooth_bps < 8_000_000,
             "smooth should not jump fully to spike, got {}",

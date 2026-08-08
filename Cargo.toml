@@ -12,6 +12,12 @@ version = "1.0.0"
 edition = "2021"
 license = "MIT"
 
+[workspace.lints.clippy]
+# Peer / session / control surfaces take many explicit parameters by design.
+too_many_arguments = "allow"
+# Channel and hot-path tuples are clearer inline than a swarm of type aliases.
+type_complexity = "allow"
+
 [package]
 name = "seedchamp"
 version.workspace = true
@@ -19,6 +25,9 @@ edition.workspace = true
 license.workspace = true
 description = "Mass seeder + high-speed leech BitTorrent TUI (greenfield, SQLite catalog)"
 readme = "README.md"
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "seedchamp"

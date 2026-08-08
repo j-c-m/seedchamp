@@ -21,3 +21,9 @@
 *.torrent.rtorrent
 *.torrent.libtorrent_resume
 
+
+# Local CI/tooling toolchains
+.cargo-home-ci/
+.rustup-home-ci/
+
+.venv-ci/

@@ -240,7 +240,7 @@ mod tests {
         let lim = WireRateLimiter::new(1000, 0); // 1 KiB/s
                                                  // Full burst = 1500 bytes
         let a = lim.allow_upload(10_000);
-        assert!(a >= 1000 && a <= 1500, "burst grant {a}");
+        assert!((1000..=1500).contains(&a), "burst grant {a}");
         lim.commit_upload(a);
         assert_eq!(lim.allow_upload(10_000), 0);
         thread::sleep(Duration::from_millis(200));

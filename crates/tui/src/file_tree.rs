@@ -141,7 +141,7 @@ fn flatten_node(
             flatten_node(child, &child_prefix, depth + 1, files, collapsed, out);
         }
     }
-    for (_name, &file_index) in &node.files {
+    for &file_index in node.files.values() {
         out.push(FileTreeRow::File { depth, file_index });
     }
 }

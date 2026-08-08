@@ -201,6 +201,7 @@ impl FdCache {
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(false)
                 .open(path)
         } else {
             OpenOptions::new().read(true).open(path)

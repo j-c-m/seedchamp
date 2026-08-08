@@ -137,12 +137,8 @@ impl HotTorrent {
             st.bitfield.clone()
         };
         let wanted = self.wanted_bf.read().clone();
-        for i in 0..self.piece_count {
-            if bitfield_get(&wanted, i) && !bitfield_get(&have_bf, i) && peer_has(i) {
-                return Some(i);
-            }
-        }
-        None
+        (0..self.piece_count)
+            .find(|&i| bitfield_get(&wanted, i) && !bitfield_get(&have_bf, i) && peer_has(i))
     }
 
     /// Missing **wanted** pieces (endgame / queue heuristics).

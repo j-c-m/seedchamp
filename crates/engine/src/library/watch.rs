@@ -549,11 +549,13 @@ mod tests {
             .write_all(&sample_torrent())
             .unwrap();
 
-        let mut wdir = WatchDirConfig::default();
-        wdir.path = watch_dir.clone();
-        wdir.dl_path = Some(data.display().to_string());
-        wdir.start = true;
-        wdir.delete_after_import = true;
+        let wdir = WatchDirConfig {
+            path: watch_dir.clone(),
+            dl_path: Some(data.display().to_string()),
+            start: true,
+            delete_after_import: true,
+            ..Default::default()
+        };
 
         let cfg = WatchConfig {
             enabled: true,

@@ -57,7 +57,7 @@ impl ActivePiece {
     }
 
     fn clear_request(&mut self, begin: u32, length: u32) -> bool {
-        if begin % BLOCK_SIZE != 0 {
+        if !begin.is_multiple_of(BLOCK_SIZE) {
             return false;
         }
         let bi = (begin / BLOCK_SIZE) as usize;
@@ -117,10 +117,11 @@ impl ActivePiece {
         if length == 0 {
             return Ok(());
         }
-        if begin % BLOCK_SIZE != 0 && begin + length != self.length {
-            if begin / BLOCK_SIZE != (begin + length - 1) / BLOCK_SIZE {
-                return Err(Error::Msg("unaligned multi-block piece data".into()));
-            }
+        if !begin.is_multiple_of(BLOCK_SIZE)
+            && begin + length != self.length
+            && begin / BLOCK_SIZE != (begin + length - 1) / BLOCK_SIZE
+        {
+            return Err(Error::Msg("unaligned multi-block piece data".into()));
         }
         let bi = (begin / BLOCK_SIZE) as usize;
         if bi >= self.have.len() {
@@ -131,7 +132,7 @@ impl ActivePiece {
         }
         let end = begin + length;
         let start_b = (begin / BLOCK_SIZE) as usize;
-        let end_b = ((end + BLOCK_SIZE - 1) / BLOCK_SIZE) as usize;
+        let end_b = end.div_ceil(BLOCK_SIZE) as usize;
         for i in start_b..end_b.min(self.have.len()) {
             let b0 = i as u32 * BLOCK_SIZE;
             let b1 = b0 + block_len(self.length, i as u32);
@@ -213,7 +214,7 @@ impl PendingPiece {
     }
 
     pub fn clear_request(&mut self, begin: u32, length: u32) -> bool {
-        if begin % BLOCK_SIZE != 0 {
+        if !begin.is_multiple_of(BLOCK_SIZE) {
             return false;
         }
         let bi = (begin / BLOCK_SIZE) as usize;
@@ -285,7 +286,7 @@ pub fn num_blocks(piece_len: u32) -> usize {
     if piece_len == 0 {
         return 0;
     }
-    ((piece_len + BLOCK_SIZE - 1) / BLOCK_SIZE) as usize
+    piece_len.div_ceil(BLOCK_SIZE) as usize
 }
 
 pub fn block_len(piece_len: u32, block_index: u32) -> u32 {
@@ -735,7 +736,7 @@ mod tests {
         let plen = BLOCK_SIZE * 2;
         let mut pool = test_staging(4, plen);
         let data = vec![0u8; BLOCK_SIZE as usize];
-        assert!(matches!(pool.ingest_if_staged(0, 0, &data).unwrap(), None));
+        assert!(pool.ingest_if_staged(0, 0, &data).unwrap().is_none());
         assert!(pool.is_empty());
         assert!(pool.try_start(0, plen));
         assert_eq!(pool.ingest_if_staged(0, 0, &data).unwrap(), Some(false));
@@ -862,10 +863,7 @@ mod tests {
             .collect();
 
         assert!(pool.take_assembling(0).is_none());
-        assert!(matches!(
-            pool.finish_block_range(0, 0, BLOCK_SIZE).unwrap(),
-            None
-        ));
+        assert!(pool.finish_block_range(0, 0, BLOCK_SIZE).unwrap().is_none());
 
         assert!(pool.try_start(0, plen));
         {

@@ -80,6 +80,10 @@ impl ActivityLog {
         self.inner.lock().lines.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Current capture filter directive (what tracing accepts into the ring).
     pub fn capture_filter(&self) -> String {
         self.capture.lock().clone()

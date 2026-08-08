@@ -66,6 +66,7 @@ pub fn deobfuscate_req2(secret: &[u8], obfuscated: &[u8; 20]) -> [u8; 20] {
 /// RC4 encrypt/decrypt for one peer after MSE, matching libtorrent:
 /// - incoming: decrypt=keyA, encrypt=keyB
 /// - outgoing: decrypt=keyB, encrypt=keyA
+///
 /// Each stream discards 1024 bytes.
 pub fn derive_peer_rc4(secret: &[u8], skey: &[u8; 20], incoming: bool) -> (Rc4, Rc4) {
     // encrypt, decrypt

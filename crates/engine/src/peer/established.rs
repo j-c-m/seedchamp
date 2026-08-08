@@ -211,13 +211,11 @@ pub(crate) fn parse_available_messages(
                         length,
                     });
                 }
-                Message::Extended { ext_id, payload } => {
-                    if ext_id == EXT_HANDSHAKE {
-                        if let Some(v) = ltep_client_version(&payload) {
-                            if let Some(slot) = cfg.client_label.as_ref() {
-                                let mut g = slot.lock();
-                                *g = prefer_client_label(&g, Some(&v));
-                            }
+                Message::Extended { ext_id, payload } if ext_id == EXT_HANDSHAKE => {
+                    if let Some(v) = ltep_client_version(&payload) {
+                        if let Some(slot) = cfg.client_label.as_ref() {
+                            let mut g = slot.lock();
+                            *g = prefer_client_label(&g, Some(&v));
                         }
                     }
                 }

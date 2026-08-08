@@ -5,6 +5,9 @@ edition = "2021"
 description = "ratatui front-end for seedchamp"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 seedchamp-engine = { path = "../engine" }
 ratatui = "0.30"

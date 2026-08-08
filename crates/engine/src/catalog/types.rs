@@ -222,7 +222,7 @@ pub struct TorrentStats {
 
 /// Bitfield helpers.
 pub fn bitfield_size_bytes(piece_count: u32) -> usize {
-    ((piece_count as usize) + 7) / 8
+    (piece_count as usize).div_ceil(8)
 }
 
 pub fn count_have_bits(bits: &[u8], piece_count: u32) -> u32 {

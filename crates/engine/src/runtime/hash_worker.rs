@@ -157,6 +157,7 @@ impl HashPool {
     /// Queue a leech piece for SHA-1 (+ disk write on success). High priority.
     ///
     /// On channel disconnect, returns the job so the caller can reclaim `data`.
+    #[allow(clippy::result_large_err)] // intentional: return HashJob for buffer reclaim
     pub fn submit(&self, job: HashJob) -> std::result::Result<(), (Error, HashJob)> {
         self.leech_tx
             .send(job)

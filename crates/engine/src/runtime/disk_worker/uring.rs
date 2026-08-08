@@ -168,7 +168,7 @@ fn uring_main(
 fn harvest_cqes(ring: &mut IoUring, inflight: &mut HashMap<u64, PieceInFlight>) {
     let mut cq = ring.completion();
     cq.sync();
-    while let Some(cqe) = cq.next() {
+    for cqe in cq {
         let (piece_key, span_idx) = unpack_user_data(cqe.user_data());
         let res = cqe.result();
         let Some(piece) = inflight.get_mut(&piece_key) else {

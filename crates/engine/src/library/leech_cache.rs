@@ -372,6 +372,6 @@ mod tests {
 
     #[test]
     fn wanted_bytes_metainfo_all_default() {
-        assert!(FREE_MARGIN_BYTES > 0);
+        const { assert!(FREE_MARGIN_BYTES > 0) };
     }
 }

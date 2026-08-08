@@ -141,7 +141,7 @@ impl Catalog {
         if from == SCHEMA_VERSION {
             return Ok(());
         }
-        if from < 1 || from > SCHEMA_VERSION {
+        if !(1..=SCHEMA_VERSION).contains(&from) {
             return Err(Error::Msg(format!(
                 "unsupported schema version {from} (want {SCHEMA_VERSION})"
             )));

@@ -14,6 +14,8 @@ use super::{
     peer_counts_for_torrent, rate_str, ratio_str,
 };
 
+// Built incrementally from many optional live/catalog fields.
+#[allow(clippy::vec_init_then_push)]
 pub(super) fn draw_detail(f: &mut Frame, area: Rect, app: &mut App) {
     let Some(d) = &app.detail else {
         f.render_widget(Paragraph::new("—").block(panel_block("", &app.theme)), area);

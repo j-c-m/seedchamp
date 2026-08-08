@@ -265,10 +265,8 @@ impl OutQueue {
 
         loop {
             if self.active.is_none() {
-                if !allow_upload {
-                    if self.ctrl.is_empty() {
-                        break;
-                    }
+                if !allow_upload && self.ctrl.is_empty() {
+                    break;
                 }
                 self.pick_next_active(torrent, cfg, &mut rc4, scratch, encode, fast_enabled)
                     .await?;

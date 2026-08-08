@@ -722,12 +722,16 @@ fn collect_filesystem_usage_unix(
         let Ok(st) = nix::sys::statvfs::statvfs(probe.as_path()) else {
             return;
         };
+        // nix/statvfs field widths differ by OS (Darwin often narrower than Linux).
+        #[allow(clippy::unnecessary_cast)] // no-op cast on Linux (already u64)
         let fr = st.fragment_size() as u64;
         if fr == 0 {
             return;
         }
+        #[allow(clippy::unnecessary_cast)]
         let total = (st.blocks() as u64).saturating_mul(fr);
         // Available to unprivileged users (matches `df` "Avail").
+        #[allow(clippy::unnecessary_cast)]
         let free = (st.blocks_available() as u64).saturating_mul(fr);
         let mount = filesystem_mount_point(&probe, dev);
 
@@ -808,10 +812,7 @@ fn filesystem_mount_point(path: &Path, dev: u64) -> PathBuf {
     use std::os::unix::fs::MetadataExt;
 
     let mut cur = path.to_path_buf();
-    loop {
-        let Some(parent) = cur.parent() else {
-            break;
-        };
+    while let Some(parent) = cur.parent() {
         // Root: parent of "/" is "" or same.
         if parent.as_os_str().is_empty() || parent == cur {
             break;

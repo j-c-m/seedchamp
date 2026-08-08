@@ -409,15 +409,14 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                     app.clear_path_completion();
                 }
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
                 // Ignore bare control chars when typing paths/commands.
-                if !ctrl {
+                if !ctrl => {
                     app.input.push(c);
                     if app.mode == Mode::Relocate {
                         app.clear_path_completion();
                     }
                 }
-            }
             _ => {}
         },
         Mode::Help => match code {
@@ -560,8 +559,8 @@ pub fn run_plain_list(db: &Path) -> Result<()> {
     println!("catalog: {}  torrents: {}", db.display(), rows.len());
     println!();
     println!(
-        "{:<6} {:<40} {:>12} {:>8} {:<6} {:<10} {}",
-        "ID", "NAME", "SIZE", "HAVE", "RUN", "STATE", "INFOHASH"
+        "{:<6} {:<40} {:>12} {:>8} {:<6} {:<10} INFOHASH",
+        "ID", "NAME", "SIZE", "HAVE", "RUN", "STATE"
     );
     println!("{}", "-".repeat(110));
     for r in &rows {

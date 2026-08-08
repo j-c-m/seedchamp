@@ -171,23 +171,6 @@ fn reject_if_self(our_peer_id: &[u8; 20], peer_hs: &[u8; HANDSHAKE_LEN]) -> Resu
     Ok(())
 }
 
-#[cfg(test)]
-mod self_peer_tests {
-    use super::*;
-    use crate::wire::encode_handshake;
-
-    #[test]
-    fn reject_matching_peer_id() {
-        let id = *b"-sc0001-selftest!!!!"; // 20
-        let ih = [0u8; 20];
-        let hs = encode_handshake(&ih, &id);
-        assert!(reject_if_self(&id, &hs).is_err());
-        let other = *b"-sc0001-otherpeer!!!"; // 20
-        let hs2 = encode_handshake(&ih, &other);
-        assert!(reject_if_self(&id, &hs2).is_ok());
-    }
-}
-
 /// Accept / serve one inbound peer on the async worker pool.
 pub async fn run_inbound_peer(
     stream: TcpStream,
@@ -646,4 +629,21 @@ pub async fn pe_initiate(
         decrypt: dec,
         rc4,
     })
+}
+
+#[cfg(test)]
+mod self_peer_tests {
+    use super::*;
+    use crate::wire::encode_handshake;
+
+    #[test]
+    fn reject_matching_peer_id() {
+        let id = *b"-sc0001-selftest!!!!"; // 20
+        let ih = [0u8; 20];
+        let hs = encode_handshake(&ih, &id);
+        assert!(reject_if_self(&id, &hs).is_err());
+        let other = *b"-sc0001-otherpeer!!!"; // 20
+        let hs2 = encode_handshake(&ih, &other);
+        assert!(reject_if_self(&id, &hs2).is_ok());
+    }
 }

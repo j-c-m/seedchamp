@@ -97,6 +97,28 @@ pub fn resolve_peer_id_prefix(s: &str) -> Vec<u8> {
     }
 }
 
+/// Run headless serve loop in a background thread. Returns handle to stop.
+///
+/// Uses catalog `want_start` only (no force-start list). Runs until handle stop.
+pub fn run_serve_loop(db_path: &Path, rt: RuntimeConfig) -> Result<SeedHandle> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let db = db_path.to_path_buf();
+    let join = thread::Builder::new()
+        .name("seedchamp-serve".into())
+        .spawn(move || {
+            if let Err(e) = serve_main(&db, rt, Vec::new(), false, stop2) {
+                tracing::error!(error = %e, "serve loop exited");
+                eprintln!("seedchamp serve error: {e}");
+            }
+        })
+        .map_err(|e| Error::Msg(format!("spawn serve: {e}")))?;
+    Ok(SeedHandle {
+        stop,
+        join: Some(join),
+    })
+}
+
 #[cfg(test)]
 mod peer_id_tests {
     use super::*;
@@ -140,26 +162,4 @@ mod peer_id_tests {
         assert_eq!(pkg_version_major(), "1");
         assert!(PKG_VERSION.starts_with("1."));
     }
-}
-
-/// Run headless serve loop in a background thread. Returns handle to stop.
-///
-/// Uses catalog `want_start` only (no force-start list). Runs until handle stop.
-pub fn run_serve_loop(db_path: &Path, rt: RuntimeConfig) -> Result<SeedHandle> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
-    let db = db_path.to_path_buf();
-    let join = thread::Builder::new()
-        .name("seedchamp-serve".into())
-        .spawn(move || {
-            if let Err(e) = serve_main(&db, rt, Vec::new(), false, stop2) {
-                tracing::error!(error = %e, "serve loop exited");
-                eprintln!("seedchamp serve error: {e}");
-            }
-        })
-        .map_err(|e| Error::Msg(format!("spawn serve: {e}")))?;
-    Ok(SeedHandle {
-        stop,
-        join: Some(join),
-    })
 }

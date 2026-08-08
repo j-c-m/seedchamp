@@ -417,7 +417,7 @@ fn build_layout(
         }],
         // Every piece is two half-piece files → multi-span write every time.
         LayoutKind::Multi => {
-            if piece_length < 2 || piece_length % 2 != 0 {
+            if piece_length < 2 || !piece_length.is_multiple_of(2) {
                 return Err("--layout multi needs even --piece-length >= 2".into());
             }
             let half = plen / 2;

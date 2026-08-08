@@ -166,7 +166,7 @@ mod tests {
         // ~35 MiB/s down for a few seconds.
         let mut down = 0u64;
         for sec in 0..=4 {
-            down = 35 * 1024 * 1024 * sec as u64;
+            down = 35 * 1024 * 1024 * sec;
             update_rate(&mut s, 0, down, t0 + Duration::from_secs(sec));
         }
         let before = s.down_bps;
@@ -175,7 +175,7 @@ mod tests {
             "expected ~35MiB/s class rate, got {before}"
         );
         // Peer disconnect style: sum drops by half, then resumes climbing.
-        down = down / 2;
+        down /= 2;
         update_rate(&mut s, 0, down, t0 + Duration::from_secs(5));
         assert_eq!(
             s.down_bps, before,

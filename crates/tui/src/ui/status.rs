@@ -163,7 +163,7 @@ pub(super) fn draw_status_screen(f: &mut Frame, area: Rect, app: &mut App) {
         )));
         for g in &ps.thread_groups {
             let display = if g.name.len() > 22 {
-                format!("{}…", &g.name.chars().take(21).collect::<String>())
+                format!("{}…", g.name.chars().take(21).collect::<String>())
             } else {
                 g.name.clone()
             };

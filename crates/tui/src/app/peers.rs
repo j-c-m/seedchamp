@@ -17,7 +17,7 @@ impl super::App {
     /// Sorted peer list for the peers screen (same order as the table).
     pub fn peers_for_screen(&self) -> Vec<seedchamp_engine::PeerInfo> {
         let sel_id = self.selected_id();
-        let mut peers: Vec<_> = self.snap.peers.iter().cloned().collect();
+        let mut peers: Vec<_> = self.snap.peers.to_vec();
         if let Some(id) = sel_id {
             peers.retain(|p| p.torrent_id == id);
         }

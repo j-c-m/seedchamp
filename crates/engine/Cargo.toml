@@ -5,6 +5,9 @@ edition = "2021"
 description = "BitTorrent engine: catalog, disk, protocol (seedchamp)"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 thiserror = "2"
 tracing = "0.1"

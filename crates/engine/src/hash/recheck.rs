@@ -165,7 +165,7 @@ pub fn maybe_progress(
     step: u32,
     on_progress: &mut impl FnMut(RecheckProgress),
 ) {
-    if checked == 1 || checked == pc || checked % step == 0 {
+    if checked == 1 || checked == pc || checked.is_multiple_of(step) {
         on_progress(RecheckProgress {
             torrent_id,
             piece_count: pc,

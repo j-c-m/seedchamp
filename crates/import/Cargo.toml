@@ -5,6 +5,9 @@ edition = "2021"
 description = "Import rtorrent session directories into seedchamp catalog"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 seedchamp-engine = { path = "../engine" }
 hex = "0.4"

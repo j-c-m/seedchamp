@@ -386,7 +386,7 @@ fn pick_rarest_and_mark_have_no_deadlock() {
                 let _ = t.try_claim_piece(i % 64, false);
                 t.release_piece_claim(i % 64);
                 // Priority rebuild nests wanted/pieces — must not deadlock with pick.
-                if i % 17 == 0 {
+                if i.is_multiple_of(17) {
                     t.rebuild_wanted_and_missing();
                 }
             }

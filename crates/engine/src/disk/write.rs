@@ -51,6 +51,7 @@ pub fn ensure_storage_with_priorities(
             .create(true)
             .write(true)
             .read(true)
+            .truncate(false)
             .open(&path)
             .map_err(|e| Error::Path(path.clone(), e.to_string()))?;
         let cur = file.metadata().map(|m| m.len()).unwrap_or(0);
