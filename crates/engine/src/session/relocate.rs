@@ -28,7 +28,7 @@ pub(super) struct SwitchPayloadOpts {
 impl super::SessionRuntime {
     /// If torrent is staged on `leech_cache` (`home_root` set), move to home then live-switch.
     ///
-    /// **No stop/start.** Uses [`Self::switch_payload_root`] (rename-preferred).
+    /// **No stop/start.** Uses [`Self::switch_payload_root`] (hardlink/copy, then swap).
     pub async fn maybe_start_leech_cache_handoff(&self, id: i64) {
         let home = match self.with_catalog(|cat| cat.get_home_root(id)) {
             Ok(Some(h)) => h,
@@ -70,7 +70,7 @@ impl super::SessionRuntime {
             id,
             stage = %from.display(),
             home = %home.display(),
-            "leech_cache: moving to library (live seed; rename-preferred)"
+            "leech_cache: moving to library (live seed; publish then swap)"
         );
         *self.inner.status.write() = format!("#{id} moving to library…");
         self.switch_payload_root(
@@ -87,7 +87,8 @@ impl super::SessionRuntime {
     /// Live or offline relocate of payload `data_root` (Ctrl-O).
     ///
     /// - **Staged** (`home_root` set and payload still on stage): retarget `home_root` only.
-    /// - **Hot:** rename-preferred transfer + catalog + `set_data_root_live` (no stop).
+    /// - **Hot:** publish dest + catalog + `set_data_root_live` + unpublish this
+    ///   torrent's files (wipe tree only when `clear_home_root`, i.e. leech-cache stage).
     /// - **Cold:** catalog `relocate_torrent_data`.
     pub fn relocate_data_root(&self, id: i64, new_root: &Path) -> Result<RelocateReport> {
         let new_root = new_root.to_path_buf();
@@ -144,7 +145,7 @@ impl super::SessionRuntime {
                 id,
                 from = %data_root.display(),
                 to = %new_root.display(),
-                renamed = stats.renamed,
+                linked = stats.linked,
                 copied = stats.copied,
                 missing = stats.missing,
                 "live relocate ok"
@@ -194,7 +195,7 @@ impl super::SessionRuntime {
         Ok((layout.data_root, complete))
     }
 
-    /// Rename-preferred transfer → catalog `data_root` → live layout → cleanup `from`.
+    /// Publish dest (source stays) → catalog `data_root` → live layout → unpublish `from`.
     ///
     /// Lock order (deadlock-safe): registry read (snapshot) → drop → transfer (no
     /// locks) → catalog_mu → registry read + layout write → drop → delete → catalog.
@@ -236,21 +237,18 @@ impl super::SessionRuntime {
             debug_assert_eq!(old, *from);
         }
 
-        // Grace: in-flight preads on old-path FDs (same inode after rename still OK).
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        if from.exists() {
-            if let Err(e) = crate::library::remove_leech_cache_tree(from) {
-                tracing::warn!(
-                    id,
-                    from = %from.display(),
-                    error = %e,
-                    "payload root cleanup failed (catalog already at new root)"
-                );
-                if opts.clear_home_root {
-                    // Leave home_root so recovery can retry stage cleanup.
-                    return Err(e);
-                }
+        if let Err(e) =
+            crate::disk::unpublish_payload_files(&layout, from, to, opts.clear_home_root)
+        {
+            tracing::warn!(
+                id,
+                from = %from.display(),
+                error = %e,
+                "payload root cleanup failed (catalog already at new root)"
+            );
+            if opts.clear_home_root {
+                // Leave home_root so the torrent stays marked staged (status / reserved).
+                return Err(e);
             }
         }
 

@@ -11,8 +11,7 @@ mod watch;
 
 pub use add::{add_torrent, add_torrent_bytes, load_torrent_bytes, AddOptions, AddReport};
 pub use leech_cache::{
-    catalog_finish_handoff, choose_placement, copy_payload_to_home, free_space_bytes,
-    leech_cache_enabled, remove_leech_cache_tree, wanted_bytes_from_layout,
+    choose_placement, free_space_bytes, leech_cache_enabled, wanted_bytes_from_layout,
     wanted_bytes_from_metainfo, Placement,
 };
 pub use run::serve_main;

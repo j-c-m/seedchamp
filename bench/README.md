@@ -47,7 +47,7 @@ Minimal single-cell run:
 ## Smoke matrix
 
 1. **Crypto sc→sc** — modes `plain` / `handshake` / `rc4` (1 seeder → 1 leecher), SHA-256
-2. **leech_cache** — leecher stages under `/tmp/{infohash}/`, downloads, handoff-copies to permanent `data_root`, deletes stage
+2. **leech_cache** — leecher stages under `/tmp/{infohash}/`, downloads, publishes dest, swaps, deletes stage
 3. **Multipeer N→1** — default 3 seeders → 1 leecher (plain)
 4. **Multipeer 1→N** — default 1 seeder → 3 leechers (plain)
 5. **Disk backend** — default **`matrix`** (OS-available: Linux `thread,uring`; FreeBSD/Darwin `thread,aio`); or `auto` / explicit list
