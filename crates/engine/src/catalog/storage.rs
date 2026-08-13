@@ -172,25 +172,6 @@ impl Catalog {
         Ok(())
     }
 
-    /// Switch from leech_cache to permanent root and clear staging marker.
-    pub fn complete_leech_cache_handoff(
-        &mut self,
-        torrent_id: i64,
-        permanent_root: &std::path::Path,
-    ) -> Result<()> {
-        let s = permanent_root.display().to_string();
-        let n = self.conn.execute(
-            "UPDATE meta_path SET data_root = ?1, home_root = NULL WHERE torrent_id = ?2",
-            params![s, torrent_id],
-        )?;
-        if n == 0 {
-            return Err(Error::Msg(format!(
-                "torrent {torrent_id} has no meta_path row"
-            )));
-        }
-        Ok(())
-    }
-
     pub fn get_data_root(&self, torrent_id: i64) -> Result<PathBuf> {
         let s: String = self.conn.query_row(
             "SELECT data_root FROM meta_path WHERE torrent_id = ?1",

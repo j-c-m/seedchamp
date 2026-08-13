@@ -207,8 +207,8 @@ pub struct PathsConfig {
     /// and the soft size cap.
     ///
     /// Empty = disabled. When set, wanted payload that fits is written under
-    /// `{leech_cache}/{infohash}/…`; on wanted-complete, copy to the permanent
-    /// root, switch catalog, delete stage. See `library::leech_cache`.
+    /// `{leech_cache}/{infohash}/…`; on wanted-complete, publish dest, swap
+    /// catalog + live layout, delete stage. See `library::leech_cache`.
     ///
     /// Recommended on a fast local volume (typically SSD). Leave empty to write
     /// straight to the permanent data root.
@@ -1022,7 +1022,7 @@ pub const TEMPLATE_HEADER: &str = r#"# seedchamp configuration
 #
 # paths.leech_cache: optional leech cache (empty = off). Wanted downloads that fit free
 #   space (and leech_cache_size) stage under {leech_cache}/{infohash}/; on wanted-complete,
-#   copy to permanent data_root, switch catalog, delete stage.
+#   publish dest (hardlink/copy), swap catalog + live layout, delete stage.
 #   Recommended on a fast local volume (typically SSD). Empty = off (use data_root).
 #   Env: SEEDCHAMP_LEECH_CACHE
 # paths.leech_cache_size: soft max committed bytes under the cache (0 = no soft cap).

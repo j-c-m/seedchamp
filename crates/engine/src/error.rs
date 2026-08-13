@@ -34,6 +34,19 @@ impl fmt::Display for Error {
     }
 }
 
+impl Error {
+    /// True when this is a missing-file IO error.
+    pub fn is_not_found(&self) -> bool {
+        match self {
+            Error::Io(e) => e.kind() == std::io::ErrorKind::NotFound,
+            Error::Path(_, msg) | Error::Msg(msg) => {
+                msg.contains("(os error 2)") || msg.contains("No such file or directory")
+            }
+            _ => false,
+        }
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -65,5 +78,26 @@ impl From<String> for Error {
 impl From<&str> for Error {
     fn from(s: &str) -> Self {
         Error::Msg(s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn path_enoent_is_not_found() {
+        let e = Error::Path(
+            PathBuf::from("/stage/x.mkv"),
+            "No such file or directory (os error 2)".into(),
+        );
+        assert!(e.is_not_found());
+        assert!(!Error::Msg("hash mismatch".into()).is_not_found());
+        let enospc = Error::Path(
+            PathBuf::from("/stage/x.mkv"),
+            "No space left on device (os error 28)".into(),
+        );
+        assert!(!enospc.is_not_found());
     }
 }

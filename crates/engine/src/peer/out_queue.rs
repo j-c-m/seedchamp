@@ -215,15 +215,25 @@ impl OutQueue {
         }
 
         if let Some(block) = self.pieces.pop_front() {
-            match begin_upload(
+            let mut fill = begin_upload(
                 &torrent.layout(),
                 block,
                 rc4.as_deref_mut(),
                 cfg.upload,
                 scratch,
             )
-            .await
-            {
+            .await;
+            if matches!(&fill, Err(e) if e.is_not_found()) {
+                fill = begin_upload(
+                    &torrent.layout(),
+                    block,
+                    rc4.as_deref_mut(),
+                    cfg.upload,
+                    scratch,
+                )
+                .await;
+            }
+            match fill {
                 Ok(inf) => {
                     self.active = Some(Active::Piece(inf));
                 }

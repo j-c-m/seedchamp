@@ -20,7 +20,7 @@ pub enum EngineCommand {
         file_idx: u32,
         priority: i32,
     },
-    /// Live (or cold) data_root relocate — rename-preferred; no stop/start.
+    /// Live (or cold) data_root relocate — publish dest then swap; no stop/start.
     Relocate {
         id: i64,
         new_root: PathBuf,

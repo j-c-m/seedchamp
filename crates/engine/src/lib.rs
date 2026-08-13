@@ -56,14 +56,13 @@ pub use error::{Error, Result};
 pub use hash::{recheck_torrent, recheck_torrent_with_progress, RecheckProgress, RecheckReport};
 pub use hot::{HotRegistry, HotTorrent};
 pub use library::{
-    add_torrent, add_torrent_bytes, catalog_finish_handoff, choose_placement, copy_payload_to_home,
-    date_stamp, default_ltep_client, expand_dl_path_template, free_space_bytes, generate_peer_id,
-    generate_peer_id_with_prefix, leech_cache_enabled, load_torrent_bytes, pkg_version_major,
-    poll_watch_once, remove_leech_cache_tree, resolve_dl_path, resolve_ltep_client,
-    resolve_peer_id_prefix, run_serve_loop, sanitize_path_component, serve_main, spawn_watcher,
-    wanted_bytes_from_layout, wanted_bytes_from_metainfo, AddOptions, AddReport, DlPathContext,
-    Placement, SeedHandle, WatchCallback, WatchHandle, WatchLoadEvent, DEFAULT_PEER_ID_PREFIX,
-    PKG_VERSION,
+    add_torrent, add_torrent_bytes, choose_placement, date_stamp, default_ltep_client,
+    expand_dl_path_template, free_space_bytes, generate_peer_id, generate_peer_id_with_prefix,
+    leech_cache_enabled, load_torrent_bytes, pkg_version_major, poll_watch_once, resolve_dl_path,
+    resolve_ltep_client, resolve_peer_id_prefix, run_serve_loop, sanitize_path_component,
+    serve_main, spawn_watcher, wanted_bytes_from_layout, wanted_bytes_from_metainfo, AddOptions,
+    AddReport, DlPathContext, Placement, SeedHandle, WatchCallback, WatchHandle, WatchLoadEvent,
+    DEFAULT_PEER_ID_PREFIX, PKG_VERSION,
 };
 pub use metainfo::{normalize_path_component, Metainfo};
 pub use peer::{run_inbound_peer, run_outbound_peer, PeerConfig};

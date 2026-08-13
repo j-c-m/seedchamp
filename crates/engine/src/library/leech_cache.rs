@@ -1,16 +1,14 @@
 //! Optional `paths.leech_cache` leech cache for incomplete wanted downloads.
 //!
 //! When configured and wanted payload fits free space (and optional size cap),
-//! leech under `{leech_cache}/{infohash40}/`. On wanted-complete: copy to permanent
-//! `home_root`, switch catalog, delete stage (seed during copy; brief stop at switch).
+//! leech under `{leech_cache}/{infohash40}/`. On wanted-complete: publish dest
+//! (hardlink or copy; source stays), swap catalog + live layout, unpublish stage.
 //!
 //! Recommended on a fast local volume (typically SSD). Leave empty to write
 //! straight to the permanent data root.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::catalog::Catalog;
 use crate::disk::StorageLayout;
 use crate::error::{Error, Result};
 use crate::metainfo::Metainfo; // used by wanted_bytes_from_metainfo
@@ -175,75 +173,6 @@ pub fn choose_placement(
         home_root: Some(permanent),
         used_leech_cache: true,
     }
-}
-
-/// Copy payload files from current layout root to `dest_root` (wanted + any existing).
-///
-/// Does not change catalog. Caller verifies sizes then switches roots.
-pub fn copy_payload_to_home(layout: &StorageLayout, dest_root: &Path) -> Result<()> {
-    fs::create_dir_all(dest_root)
-        .map_err(|e| Error::Path(dest_root.to_path_buf(), e.to_string()))?;
-
-    // Pre-check free space on destination.
-    let mut copy_bytes = 0u64;
-    for f in &layout.files {
-        let src = layout.data_root.join(&f.path);
-        if src.is_file() {
-            copy_bytes = copy_bytes.saturating_add(f.size);
-        }
-    }
-    if copy_bytes > 0 {
-        let free_home = free_space_bytes(dest_root)?;
-        if free_home < copy_bytes.saturating_add(FREE_MARGIN_BYTES) {
-            return Err(Error::Msg(format!(
-                "home root {} has insufficient free space for handoff (need ~{copy_bytes} bytes)",
-                dest_root.display()
-            )));
-        }
-    }
-
-    for f in &layout.files {
-        let src = layout.data_root.join(&f.path);
-        if !src.is_file() {
-            continue;
-        }
-        let dst = dest_root.join(&f.path);
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| Error::Path(parent.to_path_buf(), e.to_string()))?;
-        }
-        fs::copy(&src, &dst).map_err(|e| Error::Path(dst.clone(), e.to_string()))?;
-        // Size check.
-        let meta = fs::metadata(&dst).map_err(|e| Error::Path(dst.clone(), e.to_string()))?;
-        if meta.len() != f.size && f.priority != 0 {
-            return Err(Error::Msg(format!(
-                "handoff size mismatch for {}: got {} want {}",
-                f.path.display(),
-                meta.len(),
-                f.size
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Remove staged torrent directory under leech_cache (`{leech_cache}/{infohash}/`).
-pub fn remove_leech_cache_tree(stage_root: &Path) -> Result<()> {
-    if !stage_root.exists() {
-        return Ok(());
-    }
-    fs::remove_dir_all(stage_root)
-        .map_err(|e| Error::Path(stage_root.to_path_buf(), e.to_string()))?;
-    Ok(())
-}
-
-/// After copy: point catalog at home and clear home_root.
-pub fn catalog_finish_handoff(
-    catalog: &mut Catalog,
-    torrent_id: i64,
-    permanent_root: &Path,
-) -> Result<()> {
-    catalog.complete_leech_cache_handoff(torrent_id, permanent_root)
 }
 
 #[cfg(test)]
