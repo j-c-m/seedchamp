@@ -39,6 +39,14 @@ impl PeerPieceClaims {
         }
         true
     }
+
+    pub(crate) fn release(&self, index: u32) {
+        if let Ok(mut h) = self.held.lock() {
+            if h.remove(&index) && !self.torrent.has_piece(index) {
+                self.torrent.release_piece_claim(index);
+            }
+        }
+    }
 }
 
 impl Drop for PeerPieceClaims {
@@ -105,6 +113,37 @@ impl PeerDownload {
     #[inline]
     pub(crate) fn outstanding(&self) -> u64 {
         self.staging.total_outstanding() as u64
+    }
+
+    /// Match this session's staging Arc to the torrent slot.
+    pub(crate) fn sync_staging_pool(&mut self, out: &mut impl PeerOut) {
+        let downloading = !self.torrent.is_download_complete();
+        let mut want = self.torrent.staging_pool();
+        if downloading && want.is_none() {
+            self.torrent.ensure_staging_pool();
+            want = self.torrent.staging_pool();
+        }
+        let same = match (self.staging.pool_arc(), want.as_ref()) {
+            (None, None) => true,
+            (Some(have), Some(want)) => Arc::ptr_eq(have, want),
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        if self.staging.has_pool() {
+            let _ = self.cancel_outstanding(out);
+            let assembling = self.staging.indices();
+            self.staging.abandon();
+            for i in assembling {
+                self.claims.release(i);
+            }
+        }
+        if let Some(pool) = want {
+            if self.hashing.is_empty() {
+                self.staging.attach(pool);
+            }
+        }
     }
 
     /// Expect a 13-byte PIECE header: leeching with outstanding Requests.

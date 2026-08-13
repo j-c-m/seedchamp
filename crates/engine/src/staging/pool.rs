@@ -348,6 +348,41 @@ impl StagingPool {
         self.pool.as_ref().map(|p| p.capacity()).unwrap_or(0)
     }
 
+    pub fn has_pool(&self) -> bool {
+        self.pool.is_some()
+    }
+
+    pub fn pool_arc(&self) -> Option<&std::sync::Arc<super::piece_pool::PieceBufferPool>> {
+        self.pool.as_ref()
+    }
+
+    pub fn attach(&mut self, pool: std::sync::Arc<super::piece_pool::PieceBufferPool>) {
+        self.pool = Some(pool);
+    }
+
+    /// Detach the shared freelist. Assembling buffers are dropped (not parked).
+    /// Hashing slots stay until [`Self::reclaim`].
+    pub fn abandon(&mut self) {
+        let mut kept = Vec::new();
+        for s in std::mem::take(&mut self.slots) {
+            match s {
+                Slot::Assembling { .. } => {
+                    if let Some(ref pool) = self.pool {
+                        pool.discard();
+                    }
+                }
+                Slot::Hashing { index } => {
+                    if let Some(ref pool) = self.pool {
+                        pool.discard();
+                    }
+                    kept.push(Slot::Hashing { index });
+                }
+            }
+        }
+        self.slots = kept;
+        self.pool = None;
+    }
+
     fn find_assembling_mut(&mut self, index: u32) -> Option<(&mut ActivePiece, &mut Vec<u8>)> {
         for s in &mut self.slots {
             if let Slot::Assembling { piece, buf } = s {
@@ -462,22 +497,6 @@ impl StagingPool {
             pool.release(data);
         }
         // else drop data (no pool)
-    }
-
-    /// Drop assembling pieces (buffers back to freelist). Hashing stays until reclaim.
-    pub fn clear(&mut self) {
-        let mut kept = Vec::new();
-        for s in std::mem::take(&mut self.slots) {
-            match s {
-                Slot::Assembling { buf, .. } => {
-                    if let Some(ref pool) = self.pool {
-                        pool.release(buf);
-                    }
-                }
-                Slot::Hashing { index } => kept.push(Slot::Hashing { index }),
-            }
-        }
-        self.slots = kept;
     }
 
     pub fn len(&self) -> usize {
@@ -832,6 +851,61 @@ mod tests {
             .filter(|(i, _, _)| *i == 0)
             .count();
         assert_eq!(out0, 0);
+    }
+
+    #[test]
+    fn abandon_drops_assembling_without_parking() {
+        let shared = Arc::new(super::super::piece_pool::PieceBufferPool::new(
+            BLOCK_SIZE,
+            2 * BLOCK_SIZE as u64,
+        ));
+        let mut pool = StagingPool::from_pool(Arc::clone(&shared));
+        assert!(pool.try_start(0, BLOCK_SIZE));
+        assert_eq!(shared.freelist_len(), 0);
+        assert_eq!(shared.available(), 1);
+        pool.abandon();
+        assert!(!pool.has_pool());
+        assert_eq!(shared.freelist_len(), 0);
+        assert_eq!(shared.available(), 2);
+    }
+
+    #[test]
+    fn reclaim_after_abandon_does_not_park() {
+        let shared = Arc::new(super::super::piece_pool::PieceBufferPool::new(
+            BLOCK_SIZE,
+            2 * BLOCK_SIZE as u64,
+        ));
+        let mut pool = StagingPool::from_pool(Arc::clone(&shared));
+        assert!(pool.try_start(0, BLOCK_SIZE));
+        let data = vec![1u8; BLOCK_SIZE as usize];
+        assert_eq!(pool.ingest_if_staged(0, 0, &data).unwrap(), Some(true));
+        let (_len, buf) = pool.take_for_hash(0).unwrap();
+        pool.abandon();
+        assert_eq!(shared.freelist_len(), 0);
+        pool.reclaim(0, buf);
+        assert_eq!(shared.freelist_len(), 0);
+        assert_eq!(shared.available(), 2);
+    }
+
+    #[test]
+    fn attach_after_abandon_uses_new_pool() {
+        let old = Arc::new(super::super::piece_pool::PieceBufferPool::new(
+            BLOCK_SIZE,
+            2 * BLOCK_SIZE as u64,
+        ));
+        let new = Arc::new(super::super::piece_pool::PieceBufferPool::new(
+            BLOCK_SIZE,
+            2 * BLOCK_SIZE as u64,
+        ));
+        let mut pool = StagingPool::from_pool(Arc::clone(&old));
+        assert!(pool.try_start(0, BLOCK_SIZE));
+        pool.abandon();
+        assert!(!pool.has_pool());
+        pool.attach(Arc::clone(&new));
+        assert!(std::sync::Arc::ptr_eq(pool.pool_arc().unwrap(), &new));
+        assert!(pool.try_start(1, BLOCK_SIZE));
+        assert_eq!(new.available(), 1);
+        assert_eq!(old.freelist_len(), 0);
     }
 
     #[test]
