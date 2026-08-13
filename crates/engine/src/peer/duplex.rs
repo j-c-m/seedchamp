@@ -279,7 +279,6 @@ async fn reader_loop(
     'read: while !stop.load(Ordering::SeqCst) {
         let can_download = cfg.allow_download && cfg.hash.is_some();
         let downloading = can_download && !torrent.is_download_complete();
-        dl.sync_staging_pool(&mut out);
 
         if downloading && !am_interested {
             if dl.peer_avail.is_none() {
@@ -303,6 +302,7 @@ async fn reader_loop(
 
         if am_interested && !downloading && !sent_not_interested {
             let _ = dl.cancel_outstanding(&mut out);
+            dl.staging.clear();
             out.push_not_interested();
             am_interested = false;
             publish_am_interested(&cfg, false);

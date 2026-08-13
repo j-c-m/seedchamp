@@ -196,7 +196,7 @@ peers → (decrypt if RC4) → block assembler (per piece) → staging RAM
 
 **Pipeline knobs:** per-peer request depth is **BDP-sized** from an EMA of that peer’s wire download rate (`desired ≈ 5s × rate / 16 KiB`). Config: `swarm.pipeline` = initial depth; `swarm.pipeline_max` = cap.
 
-**Staging RAM:** shared **per-torrent** freelist of piece-sized buffers, budgeted by **`swarm.staging_mem_limit`** (default **256 MiB**; TOML `"256M"` / `"1G"` or integer bytes). Cap `N = limit / piece_length`; buffers are **lazy-allocated** on first acquire and recycled on release (no free/realloc thrash). Peers acquire/release under exclusive piece claim. Pool is **dropped when wanted download is complete** (all wanted pieces have, or remaining files priority-off): torrent slot cleared, peers abandon the `Arc` (reclaim then drops the buffer). File-on re-binds a new pool. Seeding keeps the hot torrent without staging RAM.
+**Staging RAM:** shared **per-torrent** freelist of piece-sized buffers, budgeted by **`swarm.staging_mem_limit`** (default **256 MiB**; TOML `"256M"` / `"1G"` or integer bytes). Cap `N = limit / piece_length`; buffers are **lazy-allocated** on first acquire and recycled on release (no free/realloc thrash). Peers acquire/release under exclusive piece claim. Pool is **dropped when wanted download is complete** (all wanted pieces have, or remaining files priority-off). Seeding keeps the hot torrent without staging RAM.
 
 ### Seed path (`[upload].backend`)
 

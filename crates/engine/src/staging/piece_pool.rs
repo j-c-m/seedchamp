@@ -164,14 +164,6 @@ impl PieceBufferPool {
         );
     }
 
-    /// Drop a checked-out buffer without parking it (peer abandon).
-    pub fn discard(&self) {
-        let mut g = self.inner.lock();
-        if g.outstanding > 0 {
-            g.outstanding -= 1;
-        }
-    }
-
     /// Return a buffer to the freelist (no heap free). Wrong size is resized.
     pub fn release(&self, mut buf: Vec<u8>) {
         let need = self.piece_length as usize;
