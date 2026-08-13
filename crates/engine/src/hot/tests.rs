@@ -461,3 +461,31 @@ fn turning_file_on_reopens_leech_need() {
     // Priority change does not alter full-torrent left.
     assert_eq!(t.left_bytes(), 32);
 }
+
+#[test]
+fn mark_have_releases_staging_pool() {
+    let layout = two_file_layout();
+    let hashes = vec![0u8; 40];
+    let t = HotTorrent::new_empty(1, [0u8; 20], "t".into(), layout, hashes);
+    t.ensure_staging_pool();
+    assert!(t.staging_pool().is_some());
+    t.mark_have(0);
+    assert!(t.is_download_complete());
+    assert!(t.staging_pool().is_none());
+}
+
+#[test]
+fn file_priority_releases_and_rebinds_staging() {
+    let mut layout = two_file_layout();
+    layout.files[1].priority = 1;
+    let hashes = vec![0u8; 40];
+    let t = HotTorrent::new_empty(1, [0u8; 20], "t".into(), layout, hashes);
+    t.ensure_staging_pool();
+    t.mark_have(0);
+    t.set_file_priority(1, 0);
+    assert!(t.is_download_complete());
+    assert!(t.staging_pool().is_none());
+    t.set_file_priority(1, 1);
+    assert!(!t.is_download_complete());
+    assert!(t.staging_pool().is_some());
+}
