@@ -9,9 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::disk::StorageLayout;
 use crate::error::{Error, Result};
-use crate::metainfo::Metainfo; // used by wanted_bytes_from_metainfo
+use crate::metainfo::Metainfo;
 
 /// Free-space / size-cap margin beyond wanted bytes (avoid filling the volume).
 const FREE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
@@ -47,21 +46,6 @@ pub fn wanted_bytes_from_metainfo(m: &Metainfo, priorities: &[i32]) -> u64 {
     if sum == 0 {
         // All off — treat as full size for placement (still go to home typically).
         m.total_size
-    } else {
-        sum
-    }
-}
-
-/// Wanted bytes from catalog layout (priority ≠ 0).
-pub fn wanted_bytes_from_layout(layout: &StorageLayout) -> u64 {
-    let mut sum = 0u64;
-    for f in &layout.files {
-        if f.priority != 0 {
-            sum = sum.saturating_add(f.size);
-        }
-    }
-    if sum == 0 {
-        layout.total_size
     } else {
         sum
     }
@@ -178,7 +162,7 @@ pub fn choose_placement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::disk::spans::FileLayout;
+    use crate::metainfo::TorrentFile;
 
     #[test]
     fn placement_disabled_without_leech_cache() {
@@ -276,27 +260,31 @@ mod tests {
 
     #[test]
     fn wanted_bytes_respects_priority() {
-        let layout = StorageLayout {
-            data_root: PathBuf::from("/t"),
+        let m = Metainfo {
+            infohash: [0u8; 20],
+            name: "t".into(),
             piece_length: 16 * 1024,
             piece_count: 1,
             total_size: 300,
+            pieces: vec![0u8; 20],
             files: vec![
-                FileLayout {
+                TorrentFile {
                     path: PathBuf::from("a"),
                     size: 100,
                     offset: 0,
-                    priority: 1,
                 },
-                FileLayout {
+                TorrentFile {
                     path: PathBuf::from("b"),
                     size: 200,
                     offset: 100,
-                    priority: 0,
                 },
             ],
+            is_multi_file: true,
+            private: false,
+            trackers: vec![],
+            announce: None,
         };
-        assert_eq!(wanted_bytes_from_layout(&layout), 100);
+        assert_eq!(wanted_bytes_from_metainfo(&m, &[1, 0]), 100);
     }
 
     #[test]

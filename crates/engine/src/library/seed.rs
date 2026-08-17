@@ -1,30 +1,6 @@
-//! Peer-id helpers and background seed-loop handle (CLI/library).
-
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
+//! Peer-id helpers and package version.
 
 use rand::Rng;
-
-use crate::error::{Error, Result};
-
-use crate::library::run::serve_main;
-use crate::session::RuntimeConfig;
-
-pub struct SeedHandle {
-    stop: Arc<AtomicBool>,
-    join: Option<thread::JoinHandle<()>>,
-}
-
-impl SeedHandle {
-    pub fn stop(self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(j) = self.join {
-            let _ = j.join();
-        }
-    }
-}
 
 /// Full package version (`1.0.0`), no git sha — CLI `version` / doctor engine line.
 pub const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -78,11 +54,6 @@ pub fn generate_peer_id_with_prefix(prefix: &[u8]) -> [u8; 20] {
     id
 }
 
-/// Generate Azureus-style peer id (default `-sc0001-` + 12 random bytes).
-pub fn generate_peer_id() -> [u8; 20] {
-    generate_peer_id_with_prefix(DEFAULT_PEER_ID_PREFIX)
-}
-
 /// Resolve a config identity / prefix string to peer-id prefix bytes.
 ///
 /// Accepts:
@@ -97,28 +68,6 @@ pub fn resolve_peer_id_prefix(s: &str) -> Vec<u8> {
     }
 }
 
-/// Run headless serve loop in a background thread. Returns handle to stop.
-///
-/// Uses catalog `want_start` only (no force-start list). Runs until handle stop.
-pub fn run_serve_loop(db_path: &Path, rt: RuntimeConfig) -> Result<SeedHandle> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
-    let db = db_path.to_path_buf();
-    let join = thread::Builder::new()
-        .name("seedchamp-serve".into())
-        .spawn(move || {
-            if let Err(e) = serve_main(&db, rt, Vec::new(), false, stop2) {
-                tracing::error!(error = %e, "serve loop exited");
-                eprintln!("seedchamp serve error: {e}");
-            }
-        })
-        .map_err(|e| Error::Msg(format!("spawn serve: {e}")))?;
-    Ok(SeedHandle {
-        stop,
-        join: Some(join),
-    })
-}
-
 #[cfg(test)]
 mod peer_id_tests {
     use super::*;
@@ -126,7 +75,7 @@ mod peer_id_tests {
     #[test]
     fn default_prefix_fixed_sc0001() {
         assert_eq!(DEFAULT_PEER_ID_PREFIX, b"-sc0001-");
-        let id = generate_peer_id();
+        let id = generate_peer_id_with_prefix(DEFAULT_PEER_ID_PREFIX);
         assert_eq!(&id[..8], b"-sc0001-");
         assert_eq!(id.len(), 20);
     }
