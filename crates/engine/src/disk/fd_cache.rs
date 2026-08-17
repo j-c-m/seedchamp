@@ -81,12 +81,9 @@ impl FdCache {
         Self::new(128, Duration::from_secs(60))
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.map.len() + self.compio.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty() && self.compio.is_empty()
     }
 
     /// Open or reuse a read-only file (or an existing R/W handle).
