@@ -14,6 +14,7 @@ fn maps_buffers_limits_and_tracker() {
     c.tracker.max_concurrent_per_host = 3;
     c.tracker.startup_stagger_ms = 10;
     c.tracker.max_inflight_announces = 4;
+    c.tracker.numwant = 80;
     let rt = RuntimeConfig::from_config(&c).unwrap();
     assert_eq!(rt.send_buffer_bytes, 4 * 1024 * 1024);
     assert_eq!(rt.recv_buffer_bytes, 2 * 1024 * 1024);
@@ -25,6 +26,7 @@ fn maps_buffers_limits_and_tracker() {
     assert_eq!(rt.max_concurrent_per_host, 3);
     assert_eq!(rt.startup_stagger_ms, 10);
     assert_eq!(rt.max_inflight_announces, 4);
+    assert_eq!(rt.numwant, 80);
 }
 
 #[test]

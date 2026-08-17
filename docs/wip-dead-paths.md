@@ -267,12 +267,12 @@ For each row: **wire the field into the live path**, or **delete it from `Config
 
 | Done | Field / env | Declared | What runs |
 |------|-------------|----------|-----------|
-| | `tracker.http_timeout_secs` | `config.rs` `TrackerConfig`, default 30 | `TRACKER_HTTP_TIMEOUT` = 12s in `tracker/http.rs` |
-| | `tracker.numwant` | default 50 | `numwant: 80` in `session/announce.rs` |
-| | `tracker.min_interval_secs` | default 60 | Floor 300 / default min 600 (`ANNOUNCE_*` in `session/announce.rs`) |
-| | `tracker.max_interval_secs` | default 3600 | Clamp max 6h (`ANNOUNCE_MAX_SECS`) |
-| | `logging.level`, env `SEEDCHAMP_LOG` | `apply_env_overrides` writes the field | TUI `init_activity_logging("info", …)` in `crates/tui/src/app/lifecycle.rs`. Template already says “reserved”. |
-| | Template `SEEDCHAMP_SEND_BUFFER=4M` | comment in `config.rs` template (~942) | Loader: `SEEDCHAMP_SEND_BUFFER_BYTES` / `SEEDCHAMP_RECV_BUFFER_BYTES` / `SEEDCHAMP_SOCKBUF` |
+| x | `tracker.http_timeout_secs` | `config.rs` `TrackerConfig`, default 30 | Deleted. HTTP still uses 12s. |
+| x | `tracker.numwant` | default 50 | Wired into `RuntimeConfig` / announce. |
+| x | `tracker.min_interval_secs` | default 60 | Deleted. Announce constants stay. |
+| x | `tracker.max_interval_secs` | default 3600 | Deleted. Announce constants stay. |
+| x | `logging.level`, env `SEEDCHAMP_LOG` | `apply_env_overrides` writes the field | Deleted. TUI still hardcodes info. |
+| x | Template `SEEDCHAMP_SEND_BUFFER=4M` | comment in `config.rs` template (~942) | Comment now `SEEDCHAMP_SEND_BUFFER_BYTES`. |
 
 **Watch default (docs/template only):** `WatchConfig::interval_secs` default is **5**. Template comment still says `interval_secs=1`. Fix with the watch docs-drift row.
 

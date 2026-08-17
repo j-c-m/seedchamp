@@ -433,6 +433,7 @@ impl SessionRuntime {
         let port = self.inner.cfg.listen.port();
         let limiter = self.inner.host_limiter.clone();
         let user_agent = self.inner.cfg.http_user_agent.clone();
+        let numwant = self.inner.cfg.numwant;
         *self.inner.status.write() = format!("quitting — stopped announce 0/{n}…");
         tracing::info!(
             n,
@@ -449,6 +450,7 @@ impl SessionRuntime {
             let port = port;
             let limiter = limiter;
             let user_agent = user_agent;
+            let numwant = numwant;
             let n = n;
             async move {
                 use futures::stream::{FuturesUnordered, StreamExt};
@@ -473,6 +475,7 @@ impl SessionRuntime {
                                 downloaded,
                                 &limiter,
                                 &user_agent,
+                                numwant,
                             )
                             .await;
                             if out.ok {

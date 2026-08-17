@@ -36,7 +36,6 @@ pub struct Config {
     /// Verified leech piece-write path ([`DiskWorker`](crate::runtime::DiskWorker)).
     pub disk: DiskConfig,
     pub limits: LimitsConfig,
-    pub logging: LoggingConfig,
     pub tracker: TrackerConfig,
     /// Catalog maintenance (soft-delete purge, etc.).
     pub catalog: CatalogConfig,
@@ -62,7 +61,6 @@ impl Default for Config {
             swarm: SwarmConfig::default(),
             disk: DiskConfig::default(),
             limits: LimitsConfig::default(),
-            logging: LoggingConfig::default(),
             tracker: TrackerConfig::default(),
             catalog: CatalogConfig::default(),
             watch: WatchConfig::default(),
@@ -422,30 +420,9 @@ impl LimitsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct LoggingConfig {
-    /// Log filter level: error | warn | info | debug | trace (reserved for tracing setup).
-    pub level: String,
-}
-
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            level: "info".into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct TrackerConfig {
-    /// HTTP announce timeout (seconds).
-    pub http_timeout_secs: u64,
-    /// numwant on announce.
+    /// Peers requested per announce.
     pub numwant: u32,
-    /// Minimum re-announce interval clamp (seconds).
-    pub min_interval_secs: u32,
-    /// Maximum re-announce interval clamp (seconds).
-    pub max_interval_secs: u32,
     /// Max in-flight announces per tracker host (`host:port`). **0** = unlimited.
     /// Protects shared trackers when many torrents start at once.
     pub max_concurrent_per_host: u32,
@@ -460,10 +437,7 @@ pub struct TrackerConfig {
 impl Default for TrackerConfig {
     fn default() -> Self {
         Self {
-            http_timeout_secs: 30,
             numwant: 50,
-            min_interval_secs: 60,
-            max_interval_secs: 3600,
             // Conservative default: 2 parallel announces per tracker host.
             max_concurrent_per_host: 2,
             // 1000 torrents × 50ms ≈ 50s spread for first-wave announces.
@@ -737,9 +711,6 @@ pub fn apply_env_overrides(cfg: &mut Config) {
             cfg.limits.redundant_seed_idle_secs = n;
         }
     }
-    if let Ok(v) = env::var("SEEDCHAMP_LOG") {
-        cfg.logging.level = v;
-    }
     if let Ok(v) = env::var("SEEDCHAMP_TRACKER_MAX_CONCURRENT_PER_HOST") {
         if let Ok(n) = v.parse() {
             cfg.tracker.max_concurrent_per_host = n;
@@ -939,7 +910,7 @@ pub const TEMPLATE_HEADER: &str = r#"# seedchamp configuration
 # network.encryption: off | prefer-plain | prefer-rc4 | require-rc4
 # network.send_buffer_bytes / recv_buffer_bytes:
 #   0 (default) = keep kernel SO_SNDBUF/SO_RCVBUF — fine for seedboxes; no forced resize.
-#   Positive = best-effort setsockopt size in bytes (env: SEEDCHAMP_SEND_BUFFER=4M, etc.).
+#   Positive = best-effort setsockopt size in bytes (env: SEEDCHAMP_SEND_BUFFER_BYTES).
 #   Kernel may clamp/double; only raise if you know you need a larger TCP window.
 # network.peer_id_prefix: seedchamp (default fixed -sc0001-) | sc | raw e.g. -sc0001-
 #   env: SEEDCHAMP_PEER_ID_PREFIX / SEEDCHAMP_IDENTITY
@@ -983,14 +954,14 @@ pub const TEMPLATE_HEADER: &str = r#"# seedchamp configuration
 #   env: SEEDCHAMP_REDUNDANT_SEED_IDLE_SECS
 # catalog.soft_delete_purge_days: hard-remove soft-deleted catalog rows after N days
 #   on startup (default 30; 0 = never). Never deletes downloaded payload files.
+# tracker.numwant: peers requested per announce (default 50)
 # tracker.max_concurrent_per_host: in-flight announces per host:port (0 = unlimited)
 # tracker.startup_stagger_ms: delay between first announces when many start (0 = none)
 # tracker.max_inflight_announces: global concurrent announce jobs (0 = unlimited)
 # limits.max_upload_bps / max_download_bps: global wire caps (0 = unlimited, free path)
-# logging.level: error | warn | info | debug | trace (reserved)
 #
 # [watch] — rtorrent schedule2 watch dirs
-#   defaults: enabled=false, interval_secs=1, dirs=[]
+#   defaults: enabled=false, interval_secs=5, dirs=[]
 #   per-dir defaults: start=false, delete_after_import=true,
 #     delete_after_import_if_exists=true, save_torrent=true, enabled=true
 #   dl_path omitted → paths.data_root
@@ -1000,7 +971,7 @@ pub const TEMPLATE_HEADER: &str = r#"# seedchamp configuration
 # Example:
 #   [watch]
 #   enabled = true
-#   interval_secs = 1
+#   interval_secs = 5
 #
 #   # Import only (load.normal)
 #   [[watch.dirs]]

@@ -151,6 +151,7 @@ pub(super) async fn announce_for(
     downloaded: u64,
     limiter: &Arc<HostLimiter>,
     user_agent: &str,
+    numwant: u32,
 ) -> AnnounceOutcome {
     // Trackers are cached on HotTorrent at activate — never reopen the catalog.
     let tiers = &t.tracker_tiers;
@@ -195,7 +196,7 @@ pub(super) async fn announce_for(
                 downloaded,
                 left: left_bytes,
                 event,
-                numwant: 80,
+                numwant,
                 user_agent: user_agent.to_string(),
                 key: t.tracker_key,
             };
@@ -313,6 +314,7 @@ impl super::SessionRuntime {
             let port = self.inner.cfg.listen.port();
             let limiter = self.inner.host_limiter.clone();
             let user_agent = self.inner.cfg.http_user_agent.clone();
+            let numwant = self.inner.cfg.numwant;
             let (uploaded, downloaded) = self.announce_transfer_totals(id);
             let out = announce_for(
                 &info,
@@ -323,6 +325,7 @@ impl super::SessionRuntime {
                 downloaded,
                 &limiter,
                 &user_agent,
+                numwant,
             )
             .await;
             let tracker_peers = out.peers;
