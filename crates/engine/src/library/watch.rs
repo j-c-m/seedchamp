@@ -428,12 +428,6 @@ pub fn sanitize_path_component(s: &str) -> String {
     }
 }
 
-/// `YYYY-MM-DD` in **local** time (UTC if local offset cannot be determined).
-pub fn date_stamp() -> String {
-    let (y, m, d) = local_ymd();
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
 fn local_ymd() -> (i32, u32, u32) {
     match time::OffsetDateTime::now_local() {
         Ok(t) => (t.year(), u32::from(t.month() as u8), u32::from(t.day())),
@@ -490,14 +484,6 @@ mod tests {
         root.extend_from_slice(&info);
         root.extend_from_slice(b"e");
         root
-    }
-
-    #[test]
-    fn date_stamp_format() {
-        let s = date_stamp();
-        assert_eq!(s.len(), 10);
-        assert_eq!(&s[4..5], "-");
-        assert_eq!(&s[7..8], "-");
     }
 
     #[test]

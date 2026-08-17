@@ -48,7 +48,7 @@ Pick the first unchecked row unless the user names one.
 | Done | Item | Playbook |
 |------|------|----------|
 | | Sync leech commit | [#1](#1-sync-leech-commit) |
-| | Headless serve wrapper | [#2](#2-headless-serve-wrapper) |
+| x | Headless serve wrapper | [#2](#2-headless-serve-wrapper) |
 | x | Private Compio FD open | [#3](#3-private-compio-fd-open) |
 | x | Cloned std read FD | [#4](#4-cloned-std-read-fd) |
 | x | Layout wanted-piece | [#5](#5-layout-wanted-piece) |
@@ -233,9 +233,9 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 | x | `Catalog::prune_peer_cache` | `catalog/peers.rs` | Tests only. Production is `prune_peer_cache_on` from `persist_after_announce`. |
 | x | `TorrentStats` | `catalog/types.rs` | Re-exported from `catalog.rs`. Never constructed. |
 | x | `InsertOutcome::is_new` | `catalog/queries.rs` | `id()` is used in tests. |
-| | `date_stamp` | `library/watch.rs` | Watch templates expand `{date}` inside `expand_dl_path_template`. Test `date_stamp_format` only. |
-| | `wanted_bytes_from_layout` | `library/leech_cache.rs` | Add uses `wanted_bytes_from_metainfo`. One unit test. Crate-root export. |
-| | `generate_peer_id` | `library/seed.rs` | Session uses `generate_peer_id_with_prefix`. Keep the prefix helper. |
+| x | `date_stamp` | `library/watch.rs` | Watch templates expand `{date}` inside `expand_dl_path_template`. Test `date_stamp_format` only. |
+| x | `wanted_bytes_from_layout` | `library/leech_cache.rs` | Add uses `wanted_bytes_from_metainfo`. One unit test. Crate-root export. |
+| x | `generate_peer_id` | `library/seed.rs` | Session uses `generate_peer_id_with_prefix`. Keep the prefix helper. |
 | | `PendingPiece` (after #1) | `staging/pool.rs` | Test assembler. Migrate remaining tests to `StagingPool` / `ActivePiece` or mark `#[cfg(test)]` and stop exporting. |
 | | `derive_peer_rc4` | `crypto/keys.rs` | Tests only. Live MSE: `rc4_key_a` / `rc4_key_b` + `Rc4::new_mse`. |
 | | `Rc4::crypt` | `crypto/rc4.rs` | Copy-then-inplace. Zero callers. Keep `crypt_inplace`. |

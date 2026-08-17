@@ -11,16 +11,14 @@ mod watch;
 
 pub use add::{add_torrent, add_torrent_bytes, load_torrent_bytes, AddOptions, AddReport};
 pub use leech_cache::{
-    choose_placement, free_space_bytes, leech_cache_enabled, wanted_bytes_from_layout,
-    wanted_bytes_from_metainfo, Placement,
+    choose_placement, free_space_bytes, leech_cache_enabled, wanted_bytes_from_metainfo, Placement,
 };
 pub use run::serve_main;
 pub use seed::{
-    default_ltep_client, generate_peer_id, generate_peer_id_with_prefix, pkg_version_major,
-    resolve_ltep_client, resolve_peer_id_prefix, run_serve_loop, SeedHandle,
-    DEFAULT_PEER_ID_PREFIX, PKG_VERSION,
+    default_ltep_client, generate_peer_id_with_prefix, pkg_version_major, resolve_ltep_client,
+    resolve_peer_id_prefix, DEFAULT_PEER_ID_PREFIX, PKG_VERSION,
 };
 pub use watch::{
-    date_stamp, expand_dl_path_template, poll_watch_once, resolve_dl_path, sanitize_path_component,
+    expand_dl_path_template, poll_watch_once, resolve_dl_path, sanitize_path_component,
     spawn_watcher, DlPathContext, WatchCallback, WatchHandle, WatchLoadEvent,
 };
