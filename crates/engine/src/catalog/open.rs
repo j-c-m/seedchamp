@@ -303,13 +303,4 @@ impl Catalog {
             .execute("UPDATE schema_version SET version = 8", [])?;
         Ok(())
     }
-
-    pub fn torrent_count(&self) -> Result<u64> {
-        let n: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM torrent WHERE COALESCE(deleted, 0) = 0",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(n as u64)
-    }
 }

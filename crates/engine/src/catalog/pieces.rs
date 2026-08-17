@@ -82,18 +82,6 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn get_bitfield_have_count(&self, torrent_id: i64) -> Result<(bool, u32)> {
-        let (complete, have): (i64, i64) = self.conn.query_row(
-            "SELECT t.complete, COALESCE(b.have_count, 0)
-             FROM torrent t
-             LEFT JOIN bitfield b ON b.torrent_id = t.id
-             WHERE t.id = ?1",
-            params![torrent_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        Ok((complete != 0, have as u32))
-    }
-
     /// Load wire bitfield bytes (all-set when complete and bits NULL).
     pub fn load_bitfield_bytes(&self, torrent_id: i64) -> Result<(bool, Vec<u8>, u32)> {
         let (complete, bits, have, _pc) = self.load_bitfield_state(torrent_id)?;
@@ -117,21 +105,6 @@ impl Catalog {
         }
         let bf = bits.unwrap_or_else(|| super::types::empty_bitfield(pc));
         Ok((false, bf, have as u32, pc))
-    }
-
-    /// Mark one piece have. Returns true if torrent is (or became) complete.
-    pub fn mark_piece_have(
-        &mut self,
-        torrent_id: i64,
-        piece_index: u32,
-        piece_len: u32,
-    ) -> Result<bool> {
-        let became = self.mark_pieces_have_batch(&[(torrent_id, piece_index, piece_len)])?;
-        if became.contains(&torrent_id) {
-            return Ok(true);
-        }
-        let (complete, _, _, _) = self.load_bitfield_state(torrent_id)?;
-        Ok(complete)
     }
 
     /// Apply many piece-have events in **one transaction**.
@@ -246,15 +219,6 @@ impl Catalog {
                 Err(e)
             }
         }
-    }
-
-    pub fn piece_count(&self, torrent_id: i64) -> Result<u32> {
-        let n: i64 = self.conn.query_row(
-            "SELECT piece_count FROM torrent WHERE id = ?1",
-            params![torrent_id],
-            |r| r.get(0),
-        )?;
-        Ok(n as u32)
     }
 
     // --- Peer cache (compact sockaddr blob, last_seen) ---
