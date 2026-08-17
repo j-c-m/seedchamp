@@ -154,7 +154,7 @@ TUI (UI thread)  →  Control plane  →  accept (seedchamp-acc)  →  least-pee
 - BEP 3 core (handshake, bitfield, request/piece/cancel, choke/unchoke, interested)
 - MSE/PE + RC4 on all post-handshake wire bytes when selected
 - BEP 10 extension protocol
-- BEP 6 Fast (Have All/None, Reject Request, Allowed Fast). Suggest is parsed and stored; the picker does not honor it yet — [wip-bep6-suggest.md](wip-bep6-suggest.md).
+- BEP 6 Fast (Have All/None, Reject Request, Allowed Fast). Suggest recv is honored in the picker; we do not send Suggest.
 - Multi-tracker (BEP 12)
 - Compact peer lists
 
