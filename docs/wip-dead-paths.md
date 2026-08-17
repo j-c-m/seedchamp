@@ -252,8 +252,8 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 | x | `FdCache::is_empty` | `disk/fd_cache.rs` | Defined, never called. |
 | x | `HASH_READ_WINDOW` crate-root / `disk.rs` re-export | `lib.rs`, `disk.rs` | Only `disk/read.rs` uses the const. Can stay `pub` inside `read.rs`. |
 | x | `recheck_torrent_with_progress` | `hash/recheck.rs` | Only `recheck_torrent` calls it with `\|_\| {}`. CLI does not stream progress. Keep `recheck_torrent`. |
-| | `TransmissionResume.want_start_hint` | `crates/import/src/transmission/resume.rs` | From `paused`. `import_one` ignores it. Start is `--start-after`. |
-| | `RtorrentSide.tied_to_file` | `crates/import/src/rtorrent_side.rs` | Parsed, never read. Design §8 still lists “tied file” — tick the docs row if you drop the field. |
+| x | `TransmissionResume.want_start_hint` | `crates/import/src/transmission/resume.rs` | From `paused`. `import_one` ignores it. Start is `--start-after`. |
+| x | `RtorrentSide.tied_to_file` | `crates/import/src/rtorrent_side.rs` | Parsed, never read. Design §8 still lists “tied file” — tick the docs row if you drop the field. |
 
 **Verify per batch:** `cargo test -p seedchamp-engine --lib <module>::` and `cargo test -p seedchamp-import` if you touched import.
 
