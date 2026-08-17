@@ -35,27 +35,12 @@ pub struct RecheckProgress {
 
 /// Recheck all pieces for `torrent_id`, update catalog bitfield (serial).
 pub fn recheck_torrent(catalog: &mut Catalog, torrent_id: i64) -> Result<RecheckReport> {
-    recheck_torrent_with_progress(catalog, torrent_id, |_| {})
-}
-
-/// Serial recheck on the calling thread (tests / fallback).
-///
-/// Progress is throttled to roughly ≤200 updates so large torrents do not flood
-/// the control event bus.
-pub fn recheck_torrent_with_progress(
-    catalog: &mut Catalog,
-    torrent_id: i64,
-    mut on_progress: impl FnMut(RecheckProgress),
-) -> Result<RecheckReport> {
     let prepared = prepare_recheck(catalog, torrent_id)?;
-    emit_start_progress(torrent_id, prepared.piece_count, &mut on_progress);
-
     let mut cache = FdCache::default_cache();
     let mut have = vec![false; prepared.piece_count as usize];
     let mut good = 0u32;
     let mut bad = 0u32;
     let mut missing = 0u32;
-    let step = progress_step(prepared.piece_count);
     let pc = prepared.piece_count;
 
     for i in 0..pc {
@@ -73,17 +58,6 @@ pub fn recheck_torrent_with_progress(
                 missing += 1;
             }
         }
-        let checked = i + 1;
-        maybe_progress(
-            torrent_id,
-            pc,
-            checked,
-            good,
-            bad,
-            missing,
-            step,
-            &mut on_progress,
-        );
     }
 
     finish_recheck(catalog, torrent_id, pc, &have, good, bad, missing)

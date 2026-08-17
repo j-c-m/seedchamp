@@ -24,8 +24,8 @@ mod tests {
     use crate::disk::spans::FileLayout;
     use crate::hot::HotRegistry;
     use crate::hot::HotTorrent;
-    use crate::runtime::DiskWorker;
     use crate::runtime::HashPool;
+    use crate::runtime::{DiskWorker, DEFAULT_DISK_DEPTH};
     use crate::session::PeerCrypto;
     use crate::upload::UploadOptions;
     use compio::net::TcpListener;
@@ -168,7 +168,8 @@ mod tests {
 
         compio::time::sleep(Duration::from_millis(30)).await;
 
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let hash = Arc::new(HashPool::spawn_n(disk, 1).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         run_outbound_peer(addr, leecher.clone(), leech_cfg(enc, hash, stop, None))
@@ -249,7 +250,8 @@ mod tests {
 
         compio::time::sleep(Duration::from_millis(30)).await;
 
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let hash = Arc::new(HashPool::spawn_n(disk, 1).unwrap());
         let crypto = Arc::new(AtomicU8::new(PeerCrypto::Unknown as u8));
         let stop = Arc::new(AtomicBool::new(false));
@@ -327,7 +329,8 @@ mod tests {
 
         compio::time::sleep(Duration::from_millis(30)).await;
 
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let hash = Arc::new(HashPool::spawn_n(disk, 1).unwrap());
         let crypto = Arc::new(AtomicU8::new(PeerCrypto::Unknown as u8));
         let stop = Arc::new(AtomicBool::new(false));
@@ -411,7 +414,8 @@ mod tests {
         })
         .detach();
         compio::time::sleep(Duration::from_millis(30)).await;
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let hash = Arc::new(HashPool::spawn_n(disk, 2).unwrap());
         let stop = Arc::new(AtomicBool::new(false));
         run_outbound_peer(

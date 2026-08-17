@@ -141,10 +141,6 @@ impl PeerWorkerPool {
         })
     }
 
-    pub fn with_default_workers() -> Result<Self> {
-        Self::new(default_peer_workers())
-    }
-
     pub fn workers(&self) -> usize {
         self.n_workers
     }
@@ -163,7 +159,8 @@ impl PeerWorkerPool {
         best_i
     }
 
-    /// Per-worker peer counts (for tests / diagnostics).
+    /// Per-worker peer counts (tests).
+    #[cfg(test)]
     pub fn peer_counts(&self) -> Vec<usize> {
         self.workers
             .iter()

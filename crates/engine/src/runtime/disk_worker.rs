@@ -25,10 +25,8 @@ mod aio;
 mod tests;
 
 pub use spawn::disk_depth_from_env;
-use spawn::{
-    backend_want_string_from_env, is_backend_dead, parse_backend_want, spawn_backend, BackendWant,
-};
 pub(crate) use spawn::{complete_discard_job, complete_write_job, write_job_sync};
+use spawn::{is_backend_dead, parse_backend_want, spawn_backend, BackendWant};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -114,21 +112,6 @@ pub struct DiskWorker {
 }
 
 impl DiskWorker {
-    /// Spawn durable piece writes (backend from env + OS probe).
-    pub fn spawn() -> Result<Self> {
-        Self::spawn_with_discard(false)
-    }
-
-    /// Spawn using env only (tests / benches). Prefer
-    /// [`Self::spawn_with_options`] from session config.
-    pub fn spawn_with_discard(discard_writes: bool) -> Result<Self> {
-        Self::spawn_with_options(
-            discard_writes,
-            &backend_want_string_from_env(),
-            disk_depth_from_env(),
-        )
-    }
-
     /// Spawn with explicit backend name and depth (from config + env merge).
     ///
     /// `backend`: `auto` | `thread` | `uring` | `aio` (unknown → error).

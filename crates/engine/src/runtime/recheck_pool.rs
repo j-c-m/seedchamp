@@ -85,7 +85,7 @@ mod tests {
     use super::*;
     use crate::catalog::TorrentInsert;
     use crate::metainfo::Metainfo;
-    use crate::runtime::disk_worker::DiskWorker;
+    use crate::runtime::disk_worker::{DiskWorker, DEFAULT_DISK_DEPTH};
     use crate::runtime::hash_worker::HashPool;
     use sha1::{Digest, Sha1};
     use std::sync::Arc;
@@ -132,7 +132,8 @@ mod tests {
         ins.source_torrent = Some("x.torrent".into());
         let id = cat.insert_torrent(&ins).unwrap().id();
 
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let pool = HashPool::spawn_n(disk, 4).unwrap();
         let report = recheck_torrent_with_pool(&mut cat, id, &pool, |_| {}).unwrap();
         assert_eq!(report.good, pc);

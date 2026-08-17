@@ -53,7 +53,7 @@ pub use disk::{
     StorageFileProblem, StorageLayout, StorageProblemKind,
 };
 pub use error::{Error, Result};
-pub use hash::{recheck_torrent, recheck_torrent_with_progress, RecheckProgress, RecheckReport};
+pub use hash::{recheck_torrent, RecheckProgress, RecheckReport};
 pub use hot::{HotRegistry, HotTorrent};
 pub use library::{
     add_torrent, add_torrent_bytes, choose_placement, default_ltep_client, expand_dl_path_template,
