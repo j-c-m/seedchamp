@@ -1,5 +1,6 @@
 //! Shared helpers for the unified peer session.
 
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -50,6 +51,36 @@ pub(crate) fn can_request_from(
     allowed_fast: &std::collections::HashSet<u32>,
 ) -> bool {
     !peer_choking || !allowed_fast.is_empty()
+}
+
+/// Stored Suggest Piece indices per peer (BEP 6; newest first).
+pub(crate) const SUGGEST_CAP: usize = 32;
+
+/// Record a Suggest Piece index. Newest at the front. Out-of-range is ignored.
+pub(crate) fn push_suggest(suggested: &mut VecDeque<u32>, index: u32, piece_count: u32) {
+    if index >= piece_count {
+        return;
+    }
+    if let Some(pos) = suggested.iter().position(|&j| j == index) {
+        suggested.remove(pos);
+    }
+    suggested.push_front(index);
+    while suggested.len() > SUGGEST_CAP {
+        suggested.pop_back();
+    }
+}
+
+/// First suggested index that `eligible` accepts. Drops the rest that fail.
+pub(crate) fn take_suggested(
+    suggested: &mut VecDeque<u32>,
+    mut eligible: impl FnMut(u32) -> bool,
+) -> Option<u32> {
+    while let Some(i) = suggested.pop_front() {
+        if eligible(i) {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Drain the torrent HAVE hub into the outbound queue (non-blocking).
@@ -120,4 +151,46 @@ pub(crate) fn publish_dl_queue(cfg: &PeerConfig, outstanding: u64, target: u64) 
 
 pub(crate) fn clear_dl_queue(cfg: &PeerConfig) {
     publish_dl_queue(cfg, 0, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_suggest_ignores_out_of_range() {
+        let mut q = VecDeque::new();
+        push_suggest(&mut q, 5, 4);
+        push_suggest(&mut q, 4, 4);
+        assert!(q.is_empty());
+        push_suggest(&mut q, 3, 4);
+        assert_eq!(q, [3]);
+    }
+
+    #[test]
+    fn push_suggest_newest_first_dedup_and_cap() {
+        let mut q = VecDeque::new();
+        for i in 0..SUGGEST_CAP as u32 {
+            push_suggest(&mut q, i, 64);
+        }
+        assert_eq!(q.len(), SUGGEST_CAP);
+        assert_eq!(q.front(), Some(&(SUGGEST_CAP as u32 - 1)));
+        assert_eq!(q.back(), Some(&0));
+
+        push_suggest(&mut q, 100, 128);
+        assert_eq!(q.len(), SUGGEST_CAP);
+        assert_eq!(q.front(), Some(&100));
+        assert_eq!(q.back(), Some(&1), "oldest dropped");
+
+        push_suggest(&mut q, 100, 128);
+        assert_eq!(q.iter().filter(|&&i| i == 100).count(), 1);
+        assert_eq!(q.front(), Some(&100));
+    }
+
+    #[test]
+    fn take_suggested_skips_ineligible_and_keeps_order() {
+        let mut q = VecDeque::from([3, 2, 1]);
+        assert_eq!(take_suggested(&mut q, |i| i == 1), Some(1));
+        assert!(q.is_empty(), "ineligible 3 and 2 dropped");
+    }
 }

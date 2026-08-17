@@ -137,7 +137,10 @@ pub(crate) fn parse_available_messages(
                 }
                 Message::SuggestPiece(i) => {
                     if downloading {
-                        fast.on_suggest(i);
+                        dl.push_suggest(i);
+                        if dl.can_request() {
+                            need_fill = true;
+                        }
                     }
                 }
                 Message::AllowedFast(i) => {

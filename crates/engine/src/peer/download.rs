@@ -1,6 +1,6 @@
 //! Per-peer download state (we leech FROM them) and piece ingest / hash outcomes.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use flume::Sender as FlumeSender;
@@ -12,7 +12,8 @@ use crate::wire::PieceHeader;
 use super::config::PeerConfig;
 use super::ctrl_scratch::CtrlScratch;
 use super::duplex::PeerOut;
-use super::helpers::{can_request_from, publish_dl_queue};
+use super::helpers::{can_request_from, publish_dl_queue, push_suggest, take_suggested};
+use crate::catalog::bitfield_get;
 use crate::hot::{HotTorrent, PeerAvailability};
 use crate::runtime::{HashJob, HashOutcome};
 
@@ -68,6 +69,8 @@ pub(crate) struct PeerDownload {
     pub peer_choking: bool,
     /// Allowed Fast from remote (may Request while choked).
     pub allowed_fast: HashSet<u32>,
+    /// Suggest Piece from remote (newest first). Advisory; does not bypass choke.
+    pub suggested: VecDeque<u32>,
     pub peer_avail: Option<PeerAvailability>,
     /// Reused encode buffer for Request / Cancel batches.
     ctrl: CtrlScratch,
@@ -92,6 +95,7 @@ impl PeerDownload {
             claims,
             peer_choking: true,
             allowed_fast: HashSet::new(),
+            suggested: VecDeque::new(),
             peer_avail,
             ctrl: CtrlScratch::new(),
         }
@@ -100,6 +104,11 @@ impl PeerDownload {
     #[inline]
     pub(crate) fn can_request(&self) -> bool {
         can_request_from(self.peer_choking, &self.allowed_fast)
+    }
+
+    /// Store a Suggest Piece index from this peer (cap 32, newest first).
+    pub(crate) fn push_suggest(&mut self, index: u32) {
+        push_suggest(&mut self.suggested, index, self.torrent.piece_count);
     }
 
     #[inline]
@@ -213,12 +222,15 @@ impl PeerDownload {
         let endgame = self.endgame;
         let torrent = &self.torrent;
         let peer_bf = self.peer_bf.as_slice();
+        let suggested = &mut self.suggested;
         let reqs = self.staging.take_requests(
             max_blocks,
             endgame,
             |st| {
-                torrent.pick_rarest_piece(
+                start_piece(
+                    torrent,
                     peer_bf,
+                    suggested,
                     |i| st.contains(i),
                     |i| hashing.contains(&i),
                     |i| claims.try_claim(i, endgame),
@@ -361,5 +373,193 @@ impl PeerDownload {
                 true
             }
         }
+    }
+}
+
+/// First eligible Suggest Piece, else rarest-first.
+fn start_piece(
+    torrent: &HotTorrent,
+    peer_bf: &[u8],
+    suggested: &mut VecDeque<u32>,
+    in_staging: impl Fn(u32) -> bool,
+    is_hashing: impl Fn(u32) -> bool,
+    mut try_claim: impl FnMut(u32) -> bool,
+    piece_ok: impl Fn(u32) -> bool,
+    endgame: bool,
+) -> Option<(u32, u32)> {
+    if let Some(i) = take_suggested(suggested, |i| {
+        torrent.wants_piece(i)
+            && !torrent.has_piece(i)
+            && bitfield_get(peer_bf, i)
+            && !in_staging(i)
+            && !is_hashing(i)
+            && piece_ok(i)
+            && try_claim(i)
+    }) {
+        return torrent.layout().piece_size(i).ok().map(|plen| (i, plen));
+    }
+    torrent.pick_rarest_piece(
+        peer_bf, in_staging, is_hashing, try_claim, piece_ok, endgame,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::{bitfield_set, empty_bitfield};
+    use crate::disk::{FileLayout, StorageLayout};
+    use std::path::PathBuf;
+
+    fn two_wanted_layout() -> StorageLayout {
+        StorageLayout {
+            data_root: PathBuf::from("/tmp"),
+            piece_length: 32,
+            piece_count: 2,
+            total_size: 64,
+            files: vec![
+                FileLayout {
+                    path: PathBuf::from("a"),
+                    size: 32,
+                    offset: 0,
+                    priority: 1,
+                },
+                FileLayout {
+                    path: PathBuf::from("b"),
+                    size: 32,
+                    offset: 32,
+                    priority: 1,
+                },
+            ],
+        }
+    }
+
+    fn torrent() -> Arc<HotTorrent> {
+        Arc::new(HotTorrent::new_empty(
+            1,
+            [0u8; 20],
+            "t".into(),
+            two_wanted_layout(),
+            vec![0u8; 40],
+        ))
+    }
+
+    fn all_peer_bf() -> Vec<u8> {
+        let mut bf = empty_bitfield(2);
+        bitfield_set(&mut bf, 0);
+        bitfield_set(&mut bf, 1);
+        bf
+    }
+
+    #[test]
+    fn suggested_beats_rarer_piece() {
+        let t = torrent();
+        t.avail_inc(0);
+        t.avail_inc(0);
+        t.avail_inc(0);
+        t.avail_inc(1); // rarer
+        let peer_bf = all_peer_bf();
+        let mut suggested = VecDeque::from([0]);
+        let mut claimed = HashSet::new();
+        let pick = start_piece(
+            &t,
+            &peer_bf,
+            &mut suggested,
+            |_| false,
+            |_| false,
+            |i| claimed.insert(i),
+            |_| true,
+            false,
+        );
+        assert_eq!(pick.map(|p| p.0), Some(0));
+    }
+
+    #[test]
+    fn ineligible_suggest_falls_back_to_rarest() {
+        let t = torrent();
+        t.avail_inc(0);
+        t.avail_inc(0);
+        t.avail_inc(0);
+        t.avail_inc(1); // rarer
+        let mut peer_bf = empty_bitfield(2);
+        bitfield_set(&mut peer_bf, 1); // peer lacks suggested 0
+        let mut suggested = VecDeque::from([0]);
+        let mut claimed = HashSet::new();
+        let pick = start_piece(
+            &t,
+            &peer_bf,
+            &mut suggested,
+            |_| false,
+            |_| false,
+            |i| claimed.insert(i),
+            |_| true,
+            false,
+        );
+        assert_eq!(pick.map(|p| p.0), Some(1));
+        assert!(suggested.is_empty());
+    }
+
+    #[test]
+    fn choked_suggest_without_allowed_fast_is_not_picked() {
+        let t = torrent();
+        t.avail_inc(0);
+        t.avail_inc(1);
+        let peer_bf = all_peer_bf();
+        let mut suggested = VecDeque::from([0]);
+        let mut claimed = HashSet::new();
+        let pick = start_piece(
+            &t,
+            &peer_bf,
+            &mut suggested,
+            |_| false,
+            |_| false,
+            |i| claimed.insert(i),
+            |_| false,
+            false,
+        );
+        assert!(pick.is_none());
+    }
+
+    #[test]
+    fn choked_suggest_in_allowed_fast_is_picked() {
+        let t = torrent();
+        t.avail_inc(0);
+        t.avail_inc(0);
+        t.avail_inc(0);
+        t.avail_inc(1); // rarer, but not Allowed Fast
+        let peer_bf = all_peer_bf();
+        let mut suggested = VecDeque::from([0]);
+        let mut claimed = HashSet::new();
+        let pick = start_piece(
+            &t,
+            &peer_bf,
+            &mut suggested,
+            |_| false,
+            |_| false,
+            |i| claimed.insert(i),
+            |i| i == 0,
+            false,
+        );
+        assert_eq!(pick.map(|p| p.0), Some(0));
+    }
+
+    #[test]
+    fn suggest_already_have_or_unwanted_is_dropped() {
+        let t = torrent();
+        t.mark_have(0);
+        let peer_bf = all_peer_bf();
+        let mut suggested = VecDeque::from([0]);
+        let mut claimed = HashSet::new();
+        let pick = start_piece(
+            &t,
+            &peer_bf,
+            &mut suggested,
+            |_| false,
+            |_| false,
+            |i| claimed.insert(i),
+            |_| true,
+            false,
+        );
+        assert_eq!(pick.map(|p| p.0), Some(1));
+        assert!(suggested.is_empty());
     }
 }
