@@ -20,7 +20,6 @@ pub use inflight::{begin_upload, write_framed_piece, InFlightUpload};
 pub use queue::{
     classify_upload_request, UploadBlock, UploadRequestStatus, MAX_REQUEST_LENGTH, MAX_UPLOAD_REQQ,
 };
-pub use read::{read_block, read_block_into};
 
 use crate::error::{Error, Result};
 

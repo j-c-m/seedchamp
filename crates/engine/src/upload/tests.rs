@@ -1,10 +1,10 @@
 use super::*;
 use crate::disk::spans::FileLayout;
-use crate::disk::{FdCache, StorageLayout};
+use crate::disk::{with_peer_fd_cache, StorageLayout};
 use std::path::PathBuf;
 
 #[compio::test]
-async fn read_block_works() {
+async fn begin_upload_fills_payload() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("f");
     let data: Vec<u8> = (0..80).collect();
@@ -21,13 +21,32 @@ async fn read_block_works() {
             priority: 1,
         }],
     };
-    let mut cache = FdCache::default_cache();
-    let mut out = Vec::new();
-    read_block(&mut cache, &layout, 0, 0, 32, &mut out)
-        .await
-        .unwrap();
-    assert_eq!(&out[..], &data[..32]);
-    assert_eq!(cache.len(), 1);
+    with_peer_fd_cache(|c| c.clear());
+    let mut scratch = vec![0u8; UPLOAD_SCRATCH_LEN];
+    let opts = UploadOptions {
+        backend: ResolvedUploadBackend::Compio,
+    };
+    begin_upload(
+        &layout,
+        UploadBlock {
+            index: 0,
+            begin: 0,
+            length: 32,
+        },
+        None,
+        opts,
+        &mut scratch,
+    )
+    .await
+    .unwrap();
+    assert_eq!(scratch[4], 7);
+    let msg_len = u32::from_be_bytes(scratch[0..4].try_into().unwrap());
+    assert_eq!(msg_len, 9 + 32);
+    assert_eq!(
+        &scratch[PIECE_HEADER_LEN..PIECE_HEADER_LEN + 32],
+        &data[..32]
+    );
+    assert_eq!(with_peer_fd_cache(|c| c.len()), 1);
 }
 
 #[test]
