@@ -53,9 +53,9 @@ Pick the first unchecked row unless the user names one.
 | x | Cloned std read FD | [#4](#4-cloned-std-read-fd) |
 | x | Layout wanted-piece | [#5](#5-layout-wanted-piece) |
 | x | Metainfo file export | [#6](#6-metainfo-file-export) |
-| | Session byte counters | [#7](#7-session-byte-counters) |
+| x | Session byte counters | [#7](#7-session-byte-counters) |
 | x | MSE leftover helpers | [#8](#8-mse-leftover-helpers) |
-| | Blocking control waits | [#9](#9-blocking-control-waits) |
+| x | Blocking control waits | [#9](#9-blocking-control-waits) |
 
 ### 1. Sync leech commit
 
@@ -242,9 +242,9 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 | | `encode_suggest_messages` | `wire/fast.rs` | Never send Suggest. Keep HAVE_ALL/NONE/Reject/Allowed Fast. |
 | | `FastSession::{peer_allows_while_choked,we_allow_while_choking}` | `wire/fast.rs` | Unused predicates. `on_suggest` / `suggested` are written and never read — drop with Suggest-recv docs row. |
 | | `full_bitfield_bytes` | `wire/messages.rs` | Catalog uses `all_set_bitfield`. |
-| | `SessionRuntime::wire_limiter` | `session/limits.rs` | Zero callers. Peers get `inner.wire_limiter` via `PeerConfig`. |
-| | `LivePeer.uploaded` / `downloaded` | `session.rs` | Always 0. Accessors use `wire_up` / `wire_down`. |
-| | `allow_upload` / `commit_upload` (+ download) | `rate_limit.rs` | Tests only. Live: `try_consume_*`, `refund_*`, `*_delay_for`. |
+| x | `SessionRuntime::wire_limiter` | `session/limits.rs` | Zero callers. Peers get `inner.wire_limiter` via `PeerConfig`. |
+| x | `LivePeer.uploaded` / `downloaded` | `session.rs` | Always 0. Accessors use `wire_up` / `wire_down`. |
+| x | `allow_upload` / `commit_upload` (+ download) | `rate_limit.rs` | Tests only. Live: `try_consume_*`, `refund_*`, `*_delay_for`. |
 | | `HashPool::spawn` | `runtime/hash_worker.rs` | Session/tests use `spawn_n`. |
 | | `PeerWorkerPool::with_default_workers` | `runtime/pool.rs` | Session uses `PeerWorkerPool::new(workers)`. |
 | | `PeerWorkerPool::peer_counts` | `runtime/pool.rs` | Tests in `pool.rs` only. |

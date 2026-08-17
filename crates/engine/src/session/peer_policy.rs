@@ -314,8 +314,6 @@ impl super::SessionRuntime {
                     direction: PeerDirection::Outbound,
                     wire_up: Some(peer_up.clone()),
                     wire_down: Some(peer_down.clone()),
-                    uploaded: AtomicU64::new(0),
-                    downloaded: AtomicU64::new(0),
                     connected_at: Instant::now(),
                     cancel: cancel.clone(),
                     stop_tx: Mutex::new(Some(stop_tx)),
@@ -386,7 +384,6 @@ impl super::SessionRuntime {
                         let e = map.entry(tid).or_insert_with(|| {
                             Arc::new(TorrentBytes {
                                 up: AtomicU64::new(0),
-                                down: AtomicU64::new(0),
                             })
                         });
                         e.up.fetch_add(n, Ordering::Relaxed);

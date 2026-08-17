@@ -1,11 +1,9 @@
 //! Live session limits (wire rate + peer floor/ceil).
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use crate::catalog::SessionLimits;
 use crate::error::Result;
-use crate::rate_limit::WireRateLimiter;
 
 impl super::SessionRuntime {
     /// Catalog + live session limits (wire caps and peer floor/ceil).
@@ -21,9 +19,5 @@ impl super::SessionRuntime {
         self.inner.max_peers.store(max_p, Ordering::Relaxed);
         self.inner.min_peers.store(min_p, Ordering::Relaxed);
         Ok(())
-    }
-
-    pub fn wire_limiter(&self) -> Arc<WireRateLimiter> {
-        self.inner.wire_limiter.clone()
     }
 }
