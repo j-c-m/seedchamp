@@ -7,7 +7,6 @@ use seedchamp_engine::{Error, Result};
 pub struct RtorrentSide {
     pub directory: Option<String>,
     pub directory_base: Option<String>,
-    pub tied_to_file: Option<String>,
     /// First start / activity (unix seconds). 0 / missing = unknown.
     pub timestamp_started: Option<i64>,
     /// Finished complete (unix seconds).
@@ -65,11 +64,6 @@ pub fn parse_rtorrent(bytes: &[u8]) -> Result<RtorrentSide> {
     if out.directory_base.is_none() {
         if let Some(s) = root.dict_get_str("directory_base") {
             out.directory_base = Some(s.to_string());
-        }
-    }
-    if let Some(s) = root.dict_get_str("tied_to_file") {
-        if !s.is_empty() {
-            out.tied_to_file = Some(s.to_string());
         }
     }
     out.timestamp_started = root.dict_get_int("timestamp.started");

@@ -19,8 +19,6 @@ pub struct TransmissionResume {
     pub file_priorities: Vec<i32>,
     pub created_at: Option<i64>,
     pub finished_at: Option<i64>,
-    /// If resume says the torrent was running (not paused).
-    pub want_start_hint: Option<bool>,
 }
 
 pub fn parse_transmission_resume(bytes: &[u8], piece_count: u32) -> Result<TransmissionResume> {
@@ -58,15 +56,6 @@ pub fn parse_transmission_resume(bytes: &[u8], piece_count: u32) -> Result<Trans
                 out.finished_at = Some(n);
                 break;
             }
-        }
-    }
-
-    // paused=true → do not auto-start; paused=false → was running
-    if let Some(v) = root.dict_get("paused") {
-        match v {
-            Value::Int(0) => out.want_start_hint = Some(true),
-            Value::Int(_) => out.want_start_hint = Some(false),
-            _ => {}
         }
     }
 
@@ -148,7 +137,6 @@ mod tests {
         assert_eq!(r.downloaded, 50);
         assert_eq!(r.created_at, Some(1_700_000_000));
         assert_eq!(r.finished_at, Some(1_700_000_500));
-        assert_eq!(r.want_start_hint, Some(false));
     }
 
     #[test]
