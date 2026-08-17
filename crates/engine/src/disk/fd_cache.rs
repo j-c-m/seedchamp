@@ -85,23 +85,9 @@ impl FdCache {
         self.map.len() + self.compio.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty() && self.compio.is_empty()
-    }
-
     /// Open or reuse a read-only file (or an existing R/W handle).
     pub fn open_read(&mut self, path: &Path) -> Result<&File> {
         self.open_with(path, false)
-    }
-
-    /// Open or reuse a read-only file and return a `dup`'d handle.
-    ///
-    /// Use when the caller needs an owned `File` that outlives the cache borrow
-    /// (e.g. async disk I/O across `.await`, or multi-op backends). The cache keeps its own FD.
-    pub fn open_read_cloned(&mut self, path: &Path) -> Result<File> {
-        let file = self.open_read(path)?;
-        file.try_clone()
-            .map_err(|e| Error::Path(path.to_path_buf(), e.to_string()))
     }
 
     /// Lookup / bump Compio entry (clone of `SharedFd`). Used by TLS peer path.
@@ -130,21 +116,6 @@ impl FdCache {
                 last_used: Instant::now(),
             },
         );
-    }
-
-    /// Open or reuse a Compio read-only file (clone of cached `SharedFd`).
-    ///
-    /// Exclusive (`&mut`) form for private caches (disk tests, isolated fill).
-    /// Peer seed fill uses [`open_read_compio_peer`].
-    pub async fn open_read_compio(&mut self, path: &Path) -> Result<CompioFile> {
-        if let Some(f) = self.compio_get(path) {
-            return Ok(f);
-        }
-        let file = CompioFile::open(path)
-            .await
-            .map_err(|e| Error::Path(path.to_path_buf(), e.to_string()))?;
-        self.compio_insert(path, file.clone());
-        Ok(file)
     }
 
     /// Open or reuse a read/write file (create parent dirs not included).
@@ -313,21 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn open_read_cloned_keeps_cache_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("f");
-        std::fs::write(&p, b"hi").unwrap();
-
-        let mut c = FdCache::new(4, Duration::from_secs(60));
-        let cloned = c.open_read_cloned(&p).unwrap();
-        assert_eq!(c.len(), 1);
-        drop(cloned);
-        // Original cache FD still live.
-        let _ = c.open_read(&p).unwrap();
-        assert_eq!(c.len(), 1);
-    }
-
-    #[test]
     fn respects_max_open() {
         let dir = tempfile::tempdir().unwrap();
         let mut c = FdCache::new(2, Duration::from_secs(3600));
@@ -337,23 +293,6 @@ mod tests {
             c.open_read(&p).unwrap();
         }
         assert!(c.len() <= 2);
-    }
-
-    #[compio::test]
-    async fn open_read_compio_reuses() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("f");
-        std::fs::write(&p, b"hi").unwrap();
-
-        let mut c = FdCache::new(4, Duration::from_secs(60));
-        let a = c.open_read_compio(&p).await.unwrap();
-        let b = c.open_read_compio(&p).await.unwrap();
-        assert_eq!(c.len(), 1);
-        drop(a);
-        drop(b);
-        assert_eq!(c.len(), 1);
-        let _ = c.open_read_compio(&p).await.unwrap();
-        assert_eq!(c.len(), 1);
     }
 
     #[compio::test]

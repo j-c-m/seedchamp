@@ -49,9 +49,9 @@ Pick the first unchecked row unless the user names one.
 |------|------|----------|
 | | Sync leech commit | [#1](#1-sync-leech-commit) |
 | | Headless serve wrapper | [#2](#2-headless-serve-wrapper) |
-| | Private Compio FD open | [#3](#3-private-compio-fd-open) |
-| | Cloned std read FD | [#4](#4-cloned-std-read-fd) |
-| | Layout wanted-piece | [#5](#5-layout-wanted-piece) |
+| x | Private Compio FD open | [#3](#3-private-compio-fd-open) |
+| x | Cloned std read FD | [#4](#4-cloned-std-read-fd) |
+| x | Layout wanted-piece | [#5](#5-layout-wanted-piece) |
 | | Metainfo file export | [#6](#6-metainfo-file-export) |
 | | Session byte counters | [#7](#7-session-byte-counters) |
 | | MSE leftover helpers | [#8](#8-mse-leftover-helpers) |
@@ -249,8 +249,8 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 | | `PeerWorkerPool::with_default_workers` | `runtime/pool.rs` | Session uses `PeerWorkerPool::new(workers)`. |
 | | `PeerWorkerPool::peer_counts` | `runtime/pool.rs` | Tests in `pool.rs` only. |
 | | `DiskWorker::spawn` | `runtime/disk_worker.rs` | Tests/peer harness. Session uses `spawn_with_options`. Keep `spawn_with_options`. |
-| | `FdCache::is_empty` | `disk/fd_cache.rs` | Defined, never called. |
-| | `HASH_READ_WINDOW` crate-root / `disk.rs` re-export | `lib.rs`, `disk.rs` | Only `disk/read.rs` uses the const. Can stay `pub` inside `read.rs`. |
+| x | `FdCache::is_empty` | `disk/fd_cache.rs` | Defined, never called. |
+| x | `HASH_READ_WINDOW` crate-root / `disk.rs` re-export | `lib.rs`, `disk.rs` | Only `disk/read.rs` uses the const. Can stay `pub` inside `read.rs`. |
 | | `recheck_torrent_with_progress` | `hash/recheck.rs` | Only `recheck_torrent` calls it with `\|_\| {}`. CLI does not stream progress. Keep `recheck_torrent`. |
 | | `TransmissionResume.want_start_hint` | `crates/import/src/transmission/resume.rs` | From `paused`. `import_one` ignores it. Start is `--start-after`. |
 | | `RtorrentSide.tied_to_file` | `crates/import/src/rtorrent_side.rs` | Parsed, never read. Design §8 still lists “tied file” — tick the docs row if you drop the field. |
