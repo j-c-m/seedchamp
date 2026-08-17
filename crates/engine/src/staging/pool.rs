@@ -1,11 +1,8 @@
-//! Piece staging: assemble blocks in RAM, SHA-1 verify, then disk write.
+//! Piece staging: assemble blocks in RAM.
 //!
 //! Per peer: assembling/hashing metadata; piece **bytes** from a shared
 //! [`PieceBufferPool`] freelist (torrent `staging_mem_limit`).
 
-use sha1::{Digest, Sha1};
-
-use crate::disk::{write_piece, FdCache, StorageLayout};
 use crate::error::{Error, Result};
 
 /// Standard BT request block size.
@@ -166,119 +163,6 @@ impl TakenPieceBuf {
         }
         let end = begin as u64 + len as u64;
         end <= self.piece.length as u64 && (begin as usize + len as usize) <= self.buf.len()
-    }
-}
-
-/// Standalone piece buffer for unit tests / sync commit path (not the peer freelist).
-#[derive(Debug)]
-pub struct PendingPiece {
-    pub index: u32,
-    pub length: u32,
-    buf: Vec<u8>,
-    have: Vec<bool>,
-    requested: Vec<bool>,
-    endgame: bool,
-}
-
-impl PendingPiece {
-    pub fn new(index: u32, length: u32) -> Self {
-        let nblocks = num_blocks(length);
-        Self {
-            index,
-            length,
-            buf: vec![0u8; length as usize],
-            have: vec![false; nblocks],
-            requested: vec![false; nblocks],
-            endgame: false,
-        }
-    }
-
-    pub fn num_blocks(&self) -> usize {
-        self.have.len()
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.have.iter().all(|&h| h)
-    }
-
-    pub fn set_endgame(&mut self, on: bool) {
-        self.endgame = on;
-    }
-
-    pub fn requeue_missing(&mut self) {
-        for (i, h) in self.have.iter().enumerate() {
-            if !*h {
-                self.requested[i] = false;
-            }
-        }
-    }
-
-    pub fn clear_request(&mut self, begin: u32, length: u32) -> bool {
-        if !begin.is_multiple_of(BLOCK_SIZE) {
-            return false;
-        }
-        let bi = (begin / BLOCK_SIZE) as usize;
-        if bi >= self.have.len() || self.have[bi] || !self.requested[bi] {
-            return false;
-        }
-        let expect = block_len(self.length, bi as u32);
-        if length != expect {
-            return false;
-        }
-        self.requested[bi] = false;
-        true
-    }
-
-    pub fn next_request(&mut self) -> Option<(u32, u32)> {
-        for i in 0..self.have.len() {
-            if !self.have[i] && !self.requested[i] {
-                self.requested[i] = true;
-                let begin = i as u32 * BLOCK_SIZE;
-                let len = block_len(self.length, i as u32);
-                return Some((begin, len));
-            }
-        }
-        None
-    }
-
-    pub fn outstanding_requests(&self) -> usize {
-        self.have
-            .iter()
-            .zip(self.requested.iter())
-            .filter(|(&h, &r)| !h && r)
-            .count()
-    }
-
-    pub fn ingest(&mut self, begin: u32, data: &[u8]) -> Result<bool> {
-        let mut active = ActivePiece {
-            index: self.index,
-            length: self.length,
-            have: std::mem::take(&mut self.have),
-            requested: std::mem::take(&mut self.requested),
-            endgame: self.endgame,
-        };
-        let r = active.ingest(&mut self.buf, begin, data);
-        self.have = active.have;
-        self.requested = active.requested;
-        self.endgame = active.endgame;
-        r
-    }
-
-    pub fn data(&self) -> &[u8] {
-        &self.buf
-    }
-
-    pub fn into_buf(self) -> Vec<u8> {
-        self.buf
-    }
-
-    pub fn verify_sha1(&self, expected20: &[u8]) -> bool {
-        if expected20.len() != 20 {
-            return false;
-        }
-        let mut h = Sha1::new();
-        h.update(&self.buf[..self.length as usize]);
-        h.finalize().as_slice() == expected20
     }
 }
 
@@ -635,31 +519,12 @@ impl StagingPool {
     }
 }
 
-/// Verify staged piece SHA-1 then write to disk. Returns Ok if written.
-pub fn commit_verified_piece(
-    cache: &mut FdCache,
-    layout: &StorageLayout,
-    piece: &PendingPiece,
-    expected_hash: &[u8],
-) -> Result<()> {
-    if !piece.is_complete() {
-        return Err(Error::Msg("piece not complete".into()));
-    }
-    if !piece.verify_sha1(expected_hash) {
-        return Err(Error::Msg(format!(
-            "piece {} hash mismatch (corrupt)",
-            piece.index
-        )));
-    }
-    write_piece(cache, layout, piece.index, piece.data())?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::disk::spans::FileLayout;
-    use crate::disk::{ensure_storage, read_piece};
+    use crate::disk::{ensure_storage, read_piece, write_piece, FdCache, StorageLayout};
+    use sha1::{Digest, Sha1};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -693,42 +558,56 @@ mod tests {
         };
         ensure_storage(&layout).unwrap();
 
-        let mut p = PendingPiece::new(0, len as u32);
-        assert_eq!(p.num_blocks(), 3);
-        assert!(!p.ingest(0, &data[0..BLOCK_SIZE as usize]).unwrap());
-        assert!(!p
-            .ingest(
+        let mut pool = test_staging(1, len as u32);
+        assert!(pool.try_start(0, len as u32));
+        assert_eq!(num_blocks(len as u32), 3);
+        assert_eq!(
+            pool.ingest_if_staged(0, 0, &data[0..BLOCK_SIZE as usize])
+                .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            pool.ingest_if_staged(
+                0,
                 BLOCK_SIZE,
                 &data[BLOCK_SIZE as usize..2 * BLOCK_SIZE as usize]
             )
-            .unwrap());
-        assert!(p
-            .ingest(2 * BLOCK_SIZE, &data[2 * BLOCK_SIZE as usize..])
-            .unwrap());
-        assert!(p.verify_sha1(&digest));
+            .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            pool.ingest_if_staged(0, 2 * BLOCK_SIZE, &data[2 * BLOCK_SIZE as usize..])
+                .unwrap(),
+            Some(true)
+        );
+        let (_plen, buf) = pool.take_for_hash(0).unwrap();
+        let mut h2 = Sha1::new();
+        h2.update(&buf[..len]);
+        assert_eq!(h2.finalize().as_slice(), digest.as_slice());
 
         let mut cache = FdCache::default_cache();
-        commit_verified_piece(&mut cache, &layout, &p, &digest).unwrap();
+        write_piece(&mut cache, &layout, 0, &buf[..len]).unwrap();
         let mut out = Vec::new();
         read_piece(&mut cache, &layout, 0, &mut out).unwrap();
         assert_eq!(out, data);
+        pool.reclaim(0, buf);
     }
 
     #[test]
     fn reject_clears_only_one_block() {
         let len = BLOCK_SIZE * 3;
-        let mut p = PendingPiece::new(0, len);
-        let _ = p.next_request().unwrap();
-        let _ = p.next_request().unwrap();
-        let _ = p.next_request().unwrap();
-        assert_eq!(p.outstanding_requests(), 3);
-        assert!(p.clear_request(BLOCK_SIZE, BLOCK_SIZE));
-        assert_eq!(p.outstanding_requests(), 2);
-        let again = p.next_request().unwrap();
-        assert_eq!(again, (BLOCK_SIZE, BLOCK_SIZE));
-        assert!(p.next_request().is_none());
-        assert!(!p.clear_request(0, 1));
-        assert_eq!(p.outstanding_requests(), 3);
+        let mut pool = test_staging(1, len);
+        assert!(pool.try_start(0, len));
+        let reqs = pool.take_requests(3, true, |_| None, |_| true);
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(pool.total_outstanding(), 3);
+        assert!(pool.clear_request(0, BLOCK_SIZE, BLOCK_SIZE));
+        assert_eq!(pool.total_outstanding(), 2);
+        let again = pool.take_requests(3, true, |_| None, |_| true);
+        assert_eq!(again, vec![(0, BLOCK_SIZE, BLOCK_SIZE)]);
+        assert!(pool.take_requests(3, true, |_| None, |_| true).is_empty());
+        assert!(!pool.clear_request(0, 0, 1));
+        assert_eq!(pool.total_outstanding(), 3);
     }
 
     #[test]
@@ -768,23 +647,26 @@ mod tests {
     #[test]
     fn pipeline_requests() {
         let len = BLOCK_SIZE * 2 + 100;
-        let mut p = PendingPiece::new(0, len);
-        let r1 = p.next_request().unwrap();
-        assert_eq!(r1, (0, BLOCK_SIZE));
-        let r2 = p.next_request().unwrap();
-        assert_eq!(r2, (BLOCK_SIZE, BLOCK_SIZE));
-        let r3 = p.next_request().unwrap();
-        assert_eq!(r3, (2 * BLOCK_SIZE, 100));
-        assert!(p.next_request().is_none());
-        p.set_endgame(true);
-        assert!(p.next_request().is_none());
-        p.requeue_missing();
-        let again = p.next_request().unwrap();
-        assert_eq!(again, (0, BLOCK_SIZE));
-        let next = p.next_request().unwrap();
-        assert_eq!(next.0, BLOCK_SIZE);
-        assert!(p.next_request().is_some());
-        assert!(p.next_request().is_none());
+        let mut pool = test_staging(1, len);
+        assert!(pool.try_start(0, len));
+        let reqs = pool.take_requests(10, true, |_| None, |_| true);
+        assert_eq!(
+            reqs,
+            vec![
+                (0, 0, BLOCK_SIZE),
+                (0, BLOCK_SIZE, BLOCK_SIZE),
+                (0, 2 * BLOCK_SIZE, 100),
+            ]
+        );
+        assert!(pool.take_requests(10, true, |_| None, |_| true).is_empty());
+        pool.enable_endgame();
+        assert!(pool.take_requests(10, true, |_| None, |_| true).is_empty());
+        pool.requeue_timed_out();
+        let again = pool.take_requests(10, true, |_| None, |_| true);
+        assert_eq!(again[0], (0, 0, BLOCK_SIZE));
+        assert_eq!(again[1].1, BLOCK_SIZE);
+        assert_eq!(again.len(), 3);
+        assert!(pool.take_requests(10, true, |_| None, |_| true).is_empty());
     }
 
     #[test]
