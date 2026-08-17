@@ -1,11 +1,8 @@
-//! Positioned reads via fd cache.
+//! Blocking `pread` via fd cache.
 //!
-//! - [`read_span`]: async entry for peer callers; currently blocking `pread`
-//!   (same as [`read_span_blocking`]). Peer seed fill uses Compio `fs` in
-//!   `upload::begin_upload` instead.
-//! - [`read_span_blocking`]: recheck/hash workers (blocking `pread`).
-//!
-//! Durable **writes** use [`crate::runtime::DiskWorker`] (not this module).
+//! Hash/recheck workers and the upload `pread` backend (peer-worker TLS cache).
+//! Compio seed fill is [`crate::upload::begin_upload`]. Durable writes are
+//! [`crate::runtime::DiskWorker`].
 
 #[cfg(not(unix))]
 use std::io::{Read, Seek, SeekFrom};
@@ -20,9 +17,7 @@ use crate::error::{Error, Result};
 pub const HASH_READ_WINDOW: usize = 256 * 1024;
 
 /// Blocking `pread`: read exactly `span.length` bytes into `buf`.
-///
-/// For recheck/hash workers. Peer tasks should use [`read_span`].
-pub fn read_span_blocking(cache: &mut FdCache, span: &IoSpan, buf: &mut [u8]) -> Result<()> {
+pub fn read_span(cache: &mut FdCache, span: &IoSpan, buf: &mut [u8]) -> Result<()> {
     let need = span.length as usize;
     if buf.len() < need {
         return Err(Error::Msg("read buffer too small for span".into()));
@@ -30,13 +25,6 @@ pub fn read_span_blocking(cache: &mut FdCache, span: &IoSpan, buf: &mut [u8]) ->
     let file = cache.open_read(&span.path)?;
     read_at_exact(file, span.file_offset, &mut buf[..need])?;
     Ok(())
-}
-
-/// Positioned read for peer async callers (exact length).
-///
-/// Blocking `pread` (same as [`read_span_blocking`]).
-pub async fn read_span(cache: &mut FdCache, span: &IoSpan, buf: &mut [u8]) -> Result<()> {
-    read_span_blocking(cache, span, buf)
 }
 
 /// Read a full piece into `out` (resized).
@@ -52,7 +40,7 @@ pub fn read_piece(
     let mut off = 0usize;
     for span in &spans {
         let n = span.length as usize;
-        read_span_blocking(cache, span, &mut out[off..off + n])?;
+        read_span(cache, span, &mut out[off..off + n])?;
         off += n;
     }
     debug_assert_eq!(off, plen);
@@ -82,7 +70,7 @@ pub fn hash_piece_windowed(
         let mut filled = 0usize;
         for span in &spans {
             let n = span.length as usize;
-            read_span_blocking(cache, span, &mut buf[filled..filled + n])?;
+            read_span(cache, span, &mut buf[filled..filled + n])?;
             filled += n;
         }
         hasher.update(&buf[..filled]);

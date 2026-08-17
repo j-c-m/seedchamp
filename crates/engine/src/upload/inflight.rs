@@ -138,7 +138,7 @@ fn fill_payload_pread(spans: &[crate::disk::spans::IoSpan], out: &mut [u8]) -> R
     for span in spans {
         let n = span.length as usize;
         with_peer_fd_cache(|cache| {
-            crate::disk::read_span_blocking(cache, span, &mut out[filled..filled + n])
+            crate::disk::read_span(cache, span, &mut out[filled..filled + n])
         })?;
         filled += n;
     }
