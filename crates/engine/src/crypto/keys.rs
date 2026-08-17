@@ -63,23 +63,6 @@ pub fn deobfuscate_req2(secret: &[u8], obfuscated: &[u8; 20]) -> [u8; 20] {
     out
 }
 
-/// RC4 encrypt/decrypt for one peer after MSE, matching libtorrent:
-/// - incoming: decrypt=keyA, encrypt=keyB
-/// - outgoing: decrypt=keyB, encrypt=keyA
-///
-/// Each stream discards 1024 bytes.
-pub fn derive_peer_rc4(secret: &[u8], skey: &[u8; 20], incoming: bool) -> (Rc4, Rc4) {
-    // encrypt, decrypt
-    let (enc_salt, dec_salt) = if incoming {
-        (&b"keyB"[..], &b"keyA"[..])
-    } else {
-        (&b"keyA"[..], &b"keyB"[..])
-    };
-    let enc_key = sha1_salt2(enc_salt, secret, skey);
-    let dec_key = sha1_salt2(dec_salt, secret, skey);
-    (Rc4::new_mse(&enc_key), Rc4::new_mse(&dec_key))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,8 +81,10 @@ mod tests {
         let s = [7u8; 96];
         let skey = [9u8; 20];
         // A is incoming, B is outgoing relative to A
-        let (mut a_enc, mut a_dec) = derive_peer_rc4(&s, &skey, true);
-        let (mut b_enc, mut b_dec) = derive_peer_rc4(&s, &skey, false);
+        let mut a_enc = Rc4::new_mse(&sha1_salt2(b"keyB", &s, &skey));
+        let mut a_dec = Rc4::new_mse(&sha1_salt2(b"keyA", &s, &skey));
+        let mut b_enc = Rc4::new_mse(&sha1_salt2(b"keyA", &s, &skey));
+        let mut b_dec = Rc4::new_mse(&sha1_salt2(b"keyB", &s, &skey));
 
         let mut msg = b"bitfield payload".to_vec();
         let orig = msg.clone();

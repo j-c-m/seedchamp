@@ -68,12 +68,6 @@ impl Rc4 {
         self.i = i;
         self.j = j;
     }
-
-    pub fn crypt(&mut self, input: &[u8], output: &mut [u8]) {
-        assert_eq!(input.len(), output.len());
-        output.copy_from_slice(input);
-        self.crypt_inplace(output);
-    }
 }
 
 #[cfg(test)]

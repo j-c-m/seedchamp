@@ -137,19 +137,6 @@ pub const MAX_PAD_B: usize = 512;
 /// ENCRYPT header: VC(8) + crypto_select(4) + len(padD)(2).
 pub const MSE_RESP_HDR: usize = 8 + 4 + 2;
 
-/// Initiator decrypts response with keyB stream (PadB = 0, exact header).
-pub fn initiator_parse_response(dec: &mut Rc4, buf: &[u8]) -> Result<u32> {
-    let mut plain = buf.to_vec();
-    dec.crypt_inplace(&mut plain);
-    if plain.len() < MSE_RESP_HDR {
-        return Err(Error::Msg("MSE response short".into()));
-    }
-    if plain[..8] != VC {
-        return Err(Error::Msg("MSE response VC mismatch".into()));
-    }
-    Ok(u32::from_be_bytes(plain[8..12].try_into().unwrap()))
-}
-
 /// Result of scanning for ENCRYPT(VC‖select‖padD) after optional PadB.
 #[derive(Debug)]
 pub enum InitiatorResponseScan {
@@ -242,7 +229,12 @@ pub fn handshake_loopback(
     .ok_or_else(|| Error::Msg("receiver rejected crypto".into()))?;
 
     let resp = receiver_build_response(&mut r_enc, select);
-    let select2 = initiator_parse_response(&mut i_dec, &resp)?;
+    let select2 = match initiator_scan_response(&mut i_dec, &resp)? {
+        InitiatorResponseScan::Found { select, .. } => select,
+        InitiatorResponseScan::NeedMore => {
+            return Err(Error::Msg("MSE loopback response incomplete".into()));
+        }
+    };
     assert_eq!(select, select2);
 
     let rc4 = select & CRYPTO_RC4 != 0;
@@ -266,52 +258,6 @@ pub fn handshake_loopback(
 
 fn find_slice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
-}
-
-/// Validate mode allows resulting select.
-pub fn validate_select(mode: EncryptionMode, select: u32) -> bool {
-    if select & CRYPTO_RC4 != 0 {
-        return mode.wants_pe();
-    }
-    if select & CRYPTO_PLAIN != 0 {
-        return mode.allows_plain();
-    }
-    false
-}
-
-// Re-exports used by older names in crypto.rs
-pub use initiator_build_sync as initiator_sync_payload;
-pub fn receiver_response_payload(
-    secret: &[u8; DH_PUB_LEN],
-    skey: &[u8; 20],
-    select: u32,
-) -> Vec<u8> {
-    let mut enc = rc4_key_b(secret, skey);
-    receiver_build_response(&mut enc, select)
-}
-
-pub fn finish_session(
-    secret: &[u8; DH_PUB_LEN],
-    skey: &[u8; 20],
-    select: u32,
-    incoming: bool,
-) -> Result<MseSession> {
-    let rc4 = select & CRYPTO_RC4 != 0;
-    if select & (CRYPTO_PLAIN | CRYPTO_RC4) == 0 {
-        return Err(Error::Msg("MSE empty crypto_select".into()));
-    }
-    // Fresh streams for callers that build MSE manually then attach BT.
-    let (encrypt, decrypt) = if incoming {
-        (rc4_key_b(secret, skey), rc4_key_a(secret, skey))
-    } else {
-        (rc4_key_a(secret, skey), rc4_key_b(secret, skey))
-    };
-    Ok(MseSession {
-        crypto_select: select,
-        encrypt,
-        decrypt,
-        rc4,
-    })
 }
 
 #[cfg(test)]

@@ -54,7 +54,7 @@ Pick the first unchecked row unless the user names one.
 | x | Layout wanted-piece | [#5](#5-layout-wanted-piece) |
 | x | Metainfo file export | [#6](#6-metainfo-file-export) |
 | | Session byte counters | [#7](#7-session-byte-counters) |
-| | MSE leftover helpers | [#8](#8-mse-leftover-helpers) |
+| x | MSE leftover helpers | [#8](#8-mse-leftover-helpers) |
 | | Blocking control waits | [#9](#9-blocking-control-waits) |
 
 ### 1. Sync leech commit
@@ -237,8 +237,8 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 | x | `wanted_bytes_from_layout` | `library/leech_cache.rs` | Add uses `wanted_bytes_from_metainfo`. One unit test. Crate-root export. |
 | x | `generate_peer_id` | `library/seed.rs` | Session uses `generate_peer_id_with_prefix`. Keep the prefix helper. |
 | x | `PendingPiece` (after #1) | `staging/pool.rs` | Test assembler. Migrate remaining tests to `StagingPool` / `ActivePiece` or mark `#[cfg(test)]` and stop exporting. |
-| | `derive_peer_rc4` | `crypto/keys.rs` | Tests only. Live MSE: `rc4_key_a` / `rc4_key_b` + `Rc4::new_mse`. |
-| | `Rc4::crypt` | `crypto/rc4.rs` | Copy-then-inplace. Zero callers. Keep `crypt_inplace`. |
+| x | `derive_peer_rc4` | `crypto/keys.rs` | Tests only. Live MSE: `rc4_key_a` / `rc4_key_b` + `Rc4::new_mse`. |
+| x | `Rc4::crypt` | `crypto/rc4.rs` | Copy-then-inplace. Zero callers. Keep `crypt_inplace`. |
 | | `encode_suggest_messages` | `wire/fast.rs` | Never send Suggest. Keep HAVE_ALL/NONE/Reject/Allowed Fast. |
 | | `FastSession::{peer_allows_while_choked,we_allow_while_choking}` | `wire/fast.rs` | Unused predicates. `on_suggest` / `suggested` are written and never read — drop with Suggest-recv docs row. |
 | | `full_bitfield_bytes` | `wire/messages.rs` | Catalog uses `all_set_bitfield`. |
