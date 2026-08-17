@@ -85,7 +85,7 @@ disk / crypto / wire / bencode
 
 **Runtime (all platforms):** Compio for accept / peer / tracker networking. Topology: accept (`seedchamp-acc`) → least-peers → N peer workers (`seedchamp-io`); tracker (`seedchamp-trk`, cyper HTTP + Compio UDP). Catalog offloads via Compio `spawn_blocking` or dedicated threads. Details: [design.md](design.md) §3 and `crates/engine/src/{session,peer,runtime}/`.
 
-- **Config:** `[upload].backend` / `SEEDCHAMP_UPLOAD_BACKEND` / `--upload-backend`: `auto` \| `pread` \| `compio`.
+- **Config:** `[upload].backend` / `SEEDCHAMP_UPLOAD_BACKEND`: `auto` \| `pread` \| `compio`. CLI `--upload-backend` is only on `seedchamp bench swarm`.
 - **RC4:** fill → encrypt → write.
 - **Leech writes:** `[disk] backend` / `depth` (default **32**); env `SEEDCHAMP_DISK_BACKEND` / `SEEDCHAMP_DISK_DEPTH`. Worst-case piece buffers ≈ **2×depth**.
 - **`paths.leech_cache`:** optional stage for wanted downloads that fit free space and optional **`paths.leech_cache_size`**; handoff to permanent `data_root` when wanted complete (same path as Ctrl-O relocate).

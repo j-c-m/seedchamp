@@ -8,7 +8,7 @@
 
 use rand::Rng;
 
-use super::config::{select_crypto, EncryptionMode, CRYPTO_PLAIN, CRYPTO_RC4};
+use super::config::{select_crypto, EncryptionMode, CRYPTO_RC4};
 use super::dh::{DhKeyPair, DH_PUB_LEN};
 use super::keys::{hash_req1, hash_req2, hash_req3, obfuscated_hash, sha1_salt2};
 use super::rc4::Rc4;
