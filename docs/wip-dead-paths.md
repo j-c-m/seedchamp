@@ -239,9 +239,9 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 | x | `PendingPiece` (after #1) | `staging/pool.rs` | Test assembler. Migrate remaining tests to `StagingPool` / `ActivePiece` or mark `#[cfg(test)]` and stop exporting. |
 | x | `derive_peer_rc4` | `crypto/keys.rs` | Tests only. Live MSE: `rc4_key_a` / `rc4_key_b` + `Rc4::new_mse`. |
 | x | `Rc4::crypt` | `crypto/rc4.rs` | Copy-then-inplace. Zero callers. Keep `crypt_inplace`. |
-| | `encode_suggest_messages` | `wire/fast.rs` | Never send Suggest. Keep HAVE_ALL/NONE/Reject/Allowed Fast. |
-| | `FastSession::{peer_allows_while_choked,we_allow_while_choking}` | `wire/fast.rs` | Unused predicates. `on_suggest` / `suggested` are written and never read — drop with Suggest-recv docs row. |
-| | `full_bitfield_bytes` | `wire/messages.rs` | Catalog uses `all_set_bitfield`. |
+| keep — docs/wip-bep6-suggest.md | `encode_suggest_messages` | `wire/fast.rs` | Never send Suggest. Keep HAVE_ALL/NONE/Reject/Allowed Fast. |
+| keep — docs/wip-bep6-suggest.md | `FastSession::{peer_allows_while_choked,we_allow_while_choking}` | `wire/fast.rs` | Unused predicates. `on_suggest` / `suggested` are written and never read — drop with Suggest-recv docs row. |
+| x | `full_bitfield_bytes` | `wire/messages.rs` | Catalog uses `all_set_bitfield`. |
 | x | `SessionRuntime::wire_limiter` | `session/limits.rs` | Zero callers. Peers get `inner.wire_limiter` via `PeerConfig`. |
 | x | `LivePeer.uploaded` / `downloaded` | `session.rs` | Always 0. Accessors use `wire_up` / `wire_down`. |
 | x | `allow_upload` / `commit_upload` (+ download) | `rate_limit.rs` | Tests only. Live: `try_consume_*`, `refund_*`, `*_delay_for`. |

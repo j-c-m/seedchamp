@@ -461,11 +461,6 @@ pub fn parse_message(buf: &[u8]) -> Result<Option<(ParsedMessage<'_>, usize)>> {
     Ok(Some((ParsedMessage::Msg(msg), 4 + len)))
 }
 
-/// Classic all-set bitfield bytes for `piece_count`.
-pub fn full_bitfield_bytes(piece_count: u32) -> Vec<u8> {
-    crate::catalog::all_set_bitfield(piece_count)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
