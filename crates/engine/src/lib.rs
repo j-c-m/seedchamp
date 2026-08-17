@@ -50,7 +50,7 @@ pub use crypto::{EncryptionMode, MseSession, Rc4, CRYPTO_PLAIN, CRYPTO_RC4};
 pub use disk::{
     check_complete_layout, ensure_storage, expand_user_path, open_read_compio_peer,
     relocate_torrent_data, with_peer_fd_cache, write_piece, FdCache, FileLayout, IoSpan,
-    StorageFileProblem, StorageLayout, StorageProblemKind, HASH_READ_WINDOW,
+    StorageFileProblem, StorageLayout, StorageProblemKind,
 };
 pub use error::{Error, Result};
 pub use hash::{recheck_torrent, recheck_torrent_with_progress, RecheckProgress, RecheckReport};

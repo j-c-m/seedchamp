@@ -102,21 +102,6 @@ impl StorageLayout {
         Ok(spans)
     }
 
-    /// True if any wanted (priority > 0) file overlaps piece `index`.
-    pub fn piece_wanted(&self, index: u32) -> bool {
-        let Ok(plen) = self.piece_size(index) else {
-            return false;
-        };
-        if plen == 0 {
-            return false;
-        }
-        let start = index as u64 * self.piece_length as u64;
-        let end = start + plen as u64;
-        self.files
-            .iter()
-            .any(|f| f.wanted() && f.offset < end && f.end() > start)
-    }
-
     /// Spans covering piece `index`.
     pub fn spans_for_piece(&self, index: u32) -> Result<Vec<IoSpan>> {
         let len = self.piece_size(index)? as u64;
