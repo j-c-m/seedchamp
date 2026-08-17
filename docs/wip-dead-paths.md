@@ -52,7 +52,7 @@ Pick the first unchecked row unless the user names one.
 | x | Private Compio FD open | [#3](#3-private-compio-fd-open) |
 | x | Cloned std read FD | [#4](#4-cloned-std-read-fd) |
 | x | Layout wanted-piece | [#5](#5-layout-wanted-piece) |
-| | Metainfo file export | [#6](#6-metainfo-file-export) |
+| x | Metainfo file export | [#6](#6-metainfo-file-export) |
 | | Session byte counters | [#7](#7-session-byte-counters) |
 | | MSE leftover helpers | [#8](#8-mse-leftover-helpers) |
 | | Blocking control waits | [#9](#9-blocking-control-waits) |
@@ -226,13 +226,13 @@ Shrink visibility (`pub(crate)` / `#[cfg(test)]`) or delete. Not a second implem
 
 | Done | Symbol | Where | Notes |
 |------|--------|-------|-------|
-| | `Catalog::torrent_count` | `catalog/open.rs` | `SELECT COUNT(*) … deleted=0`. No callers. |
-| | `Catalog::piece_count` | `catalog/pieces.rs` | No `.piece_count(` callers. |
-| | `Catalog::mark_piece_have` | `catalog/pieces.rs` | Wrapper. Session uses `mark_pieces_have_batch`. |
-| | `Catalog::get_bitfield_have_count` | `catalog/pieces.rs` | Tests in `catalog/queries.rs` and `hash/recheck.rs` only. |
-| | `Catalog::prune_peer_cache` | `catalog/peers.rs` | Tests only. Production is `prune_peer_cache_on` from `persist_after_announce`. |
-| | `TorrentStats` | `catalog/types.rs` | Re-exported from `catalog.rs`. Never constructed. |
-| | `InsertOutcome::is_new` | `catalog/queries.rs` | `id()` is used in tests. |
+| x | `Catalog::torrent_count` | `catalog/open.rs` | `SELECT COUNT(*) … deleted=0`. No callers. |
+| x | `Catalog::piece_count` | `catalog/pieces.rs` | No `.piece_count(` callers. |
+| x | `Catalog::mark_piece_have` | `catalog/pieces.rs` | Wrapper. Session uses `mark_pieces_have_batch`. |
+| x | `Catalog::get_bitfield_have_count` | `catalog/pieces.rs` | Tests in `catalog/queries.rs` and `hash/recheck.rs` only. |
+| x | `Catalog::prune_peer_cache` | `catalog/peers.rs` | Tests only. Production is `prune_peer_cache_on` from `persist_after_announce`. |
+| x | `TorrentStats` | `catalog/types.rs` | Re-exported from `catalog.rs`. Never constructed. |
+| x | `InsertOutcome::is_new` | `catalog/queries.rs` | `id()` is used in tests. |
 | | `date_stamp` | `library/watch.rs` | Watch templates expand `{date}` inside `expand_dl_path_template`. Test `date_stamp_format` only. |
 | | `wanted_bytes_from_layout` | `library/leech_cache.rs` | Add uses `wanted_bytes_from_metainfo`. One unit test. Crate-root export. |
 | | `generate_peer_id` | `library/seed.rs` | Session uses `generate_peer_id_with_prefix`. Keep the prefix helper. |

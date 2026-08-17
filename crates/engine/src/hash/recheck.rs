@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(report.good, m.piece_count);
         assert_eq!(report.bad, 0);
         assert!(report.complete);
-        let (complete, have) = cat.get_bitfield_have_count(id).unwrap();
+        let (complete, _, have) = cat.load_bitfield_bytes(id).unwrap();
         assert!(complete);
         assert_eq!(have, m.piece_count);
 
@@ -260,7 +260,7 @@ mod tests {
         let report = recheck_torrent(&mut cat, id).unwrap();
         assert!(!report.complete);
         assert!(report.bad >= 1);
-        let (complete, _) = cat.get_bitfield_have_count(id).unwrap();
+        let (complete, _, _) = cat.load_bitfield_bytes(id).unwrap();
         assert!(!complete);
     }
 }

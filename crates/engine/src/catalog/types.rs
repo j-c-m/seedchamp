@@ -211,15 +211,6 @@ impl Default for SessionLimits {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct TorrentStats {
-    pub uploaded: u64,
-    pub downloaded: u64,
-    pub corrupted: u64,
-    pub active_time: u64,
-    pub finished_at: Option<i64>,
-}
-
 /// Bitfield helpers.
 pub fn bitfield_size_bytes(piece_count: u32) -> usize {
     (piece_count as usize).div_ceil(8)

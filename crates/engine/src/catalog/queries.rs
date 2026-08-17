@@ -113,13 +113,6 @@ impl InsertOutcome {
             | InsertOutcome::Restored { id } => id,
         }
     }
-
-    pub fn is_new(self) -> bool {
-        matches!(
-            self,
-            InsertOutcome::Inserted { .. } | InsertOutcome::Restored { .. }
-        )
-    }
 }
 
 #[cfg(test)]
@@ -168,14 +161,9 @@ mod peer_cache_tests {
         // Re-upsert same set bumps last_seen (still 3 rows).
         cat.upsert_peer_cache(tid, &[a]).unwrap();
         assert_eq!(cat.peer_cache_len(tid).unwrap(), 3);
-        // Prune to 2 — a should survive as most recently touched.
-        cat.prune_peer_cache(tid, 2).unwrap();
-        assert_eq!(cat.peer_cache_len(tid).unwrap(), 2);
-        let kept = cat.list_peer_cache(tid, 10).unwrap();
-        assert!(kept.contains(&a));
-
-        // Under keep: prune is a no-op (COUNT short-circuit).
-        assert_eq!(cat.prune_peer_cache(tid, 10).unwrap(), 0);
+        // Announce persist prunes tracker peers to keep=2.
+        cat.persist_after_announce(tid, &[a, b, c], &[], 2, None)
+            .unwrap();
         assert_eq!(cat.peer_cache_len(tid).unwrap(), 2);
     }
 
@@ -473,7 +461,7 @@ mod storage_audit_tests {
         let rep = cat.audit_complete_storage().unwrap();
         assert_eq!(rep.checked, 1);
         assert_eq!(rep.demoted, 0);
-        let (complete, have) = cat.get_bitfield_have_count(id).unwrap();
+        let (complete, _, have) = cat.load_bitfield_bytes(id).unwrap();
         assert!(complete);
         assert_eq!(have, 1);
         let want: i64 = cat
@@ -494,7 +482,7 @@ mod storage_audit_tests {
         let id = insert_complete_with_file(&mut cat, dir.path(), "gone", 2, 32, None);
         let rep = cat.audit_complete_storage().unwrap();
         assert_eq!(rep.demoted, 1);
-        let (complete, have) = cat.get_bitfield_have_count(id).unwrap();
+        let (complete, _, have) = cat.load_bitfield_bytes(id).unwrap();
         assert!(!complete);
         assert_eq!(have, 0);
         let (want, state, err): (i64, String, Option<String>) = cat
@@ -527,7 +515,7 @@ mod storage_audit_tests {
         let id = insert_complete_with_file(&mut cat, dir.path(), "long", 3, 32, Some(&payload));
         let rep = cat.audit_complete_storage().unwrap();
         assert_eq!(rep.demoted, 1);
-        let (complete, _) = cat.get_bitfield_have_count(id).unwrap();
+        let (complete, _, _) = cat.load_bitfield_bytes(id).unwrap();
         assert!(!complete);
         let err: String = cat
             .conn
@@ -547,7 +535,7 @@ mod storage_audit_tests {
         let payload = vec![1u8; 8];
         let id = insert_complete_with_file(&mut cat, dir.path(), "short", 4, 32, Some(&payload));
         assert_eq!(cat.audit_complete_storage().unwrap().demoted, 1);
-        let (complete, have) = cat.get_bitfield_have_count(id).unwrap();
+        let (complete, _, have) = cat.load_bitfield_bytes(id).unwrap();
         assert!(!complete && have == 0);
     }
 

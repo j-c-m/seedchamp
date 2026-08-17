@@ -54,25 +54,6 @@ impl Catalog {
         Ok(out)
     }
 
-    /// Keep at most `keep` most-recent peers per torrent (evicts older rows).
-    ///
-    /// No-op (and no DELETE / no write transaction) when already ≤ `keep` rows.
-    pub fn prune_peer_cache(&mut self, torrent_id: i64, keep: usize) -> Result<usize> {
-        let keep_i = keep.max(1) as i64;
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM peer_cache WHERE torrent_id = ?1",
-            params![torrent_id],
-            |r| r.get(0),
-        )?;
-        if count <= keep_i {
-            return Ok(0);
-        }
-        let tx = self.conn.transaction()?;
-        let n = prune_peer_cache_on(&tx, torrent_id, keep)?;
-        tx.commit()?;
-        Ok(n)
-    }
-
     /// How many peers are cached for this torrent.
     pub fn peer_cache_len(&self, torrent_id: i64) -> Result<usize> {
         let n: i64 = self.conn.query_row(
@@ -144,8 +125,7 @@ fn upsert_peer_cache_on(
 
 /// Delete oldest peers when over `keep`. Cheap COUNT short-circuit when under cap.
 ///
-/// Caller may already be inside a transaction (`persist_after_announce`) or may
-/// have pre-checked COUNT (public [`Catalog::prune_peer_cache`]).
+/// Caller is inside a transaction (`persist_after_announce`).
 fn prune_peer_cache_on(conn: &Connection, torrent_id: i64, keep: usize) -> Result<usize> {
     let keep = keep.max(1) as i64;
     let count: i64 = conn.query_row(

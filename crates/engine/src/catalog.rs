@@ -17,5 +17,5 @@ pub use trackers::TrackerAnnounceUpdate;
 pub use types::{
     all_set_bitfield, bitfield_get, bitfield_set, bitfield_size_bytes, count_have_bits,
     empty_bitfield, FileProgress, FileRow, SessionLimits, TorrentDetail, TorrentInsert,
-    TorrentListRow, TorrentStats, TrackerRow,
+    TorrentListRow, TrackerRow,
 };

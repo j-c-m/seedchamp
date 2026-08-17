@@ -179,23 +179,6 @@ impl Catalog {
         Ok(v)
     }
 
-    /// Write stored metainfo blob to `path` (fails if no blob).
-    pub fn export_torrent_file(&self, torrent_id: i64, path: &std::path::Path) -> Result<()> {
-        let Some(blob) = self.get_metainfo_blob(torrent_id)? else {
-            return Err(Error::Msg(format!(
-                "torrent #{torrent_id} has no stored metainfo blob"
-            )));
-        };
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| Error::Path(parent.to_path_buf(), e.to_string()))?;
-            }
-        }
-        std::fs::write(path, &blob).map_err(|e| Error::Path(path.to_path_buf(), e.to_string()))?;
-        Ok(())
-    }
-
     /// Refresh timestamps / lifetime stats from an rtorrent session re-import.
     ///
     /// Used when the torrent already exists so a second `import` can fix
