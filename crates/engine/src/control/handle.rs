@@ -87,53 +87,6 @@ impl ControlHandle {
         self.send(EngineCommand::ListCatalog { filter })
     }
 
-    /// Start and wait for `Started` or `StartFailed` (CLI / tests).
-    pub fn start(&self, id: i64) -> Result<()> {
-        self.request_start(id)?;
-        self.wait_for(
-            |e| match e {
-                ControlEvent::Started { id: i } if *i == id => Some(Ok(())),
-                ControlEvent::StartFailed { id: i, error } if *i == id => {
-                    Some(Err(Error::Msg(error.clone())))
-                }
-                _ => None,
-            },
-            Duration::from_secs(30),
-        )
-    }
-
-    /// Stop and wait for `Stopped` or `StopFailed` (CLI / tests).
-    pub fn stop(&self, id: i64) -> Result<()> {
-        self.request_stop(id)?;
-        self.wait_for(
-            |e| match e {
-                ControlEvent::Stopped { id: i } if *i == id => Some(Ok(())),
-                ControlEvent::StopFailed { id: i, error } if *i == id => {
-                    Some(Err(Error::Msg(error.clone())))
-                }
-                _ => None,
-            },
-            Duration::from_secs(15),
-        )
-    }
-
-    /// Recheck and wait for `Rechecked` or `RecheckFailed` (CLI / tests).
-    pub fn recheck(&self, id: i64) -> Result<String> {
-        self.request_recheck(id)?;
-        self.wait_for(
-            |e| match e {
-                ControlEvent::Rechecked { id: i, message, .. } if *i == id => {
-                    Some(Ok(message.clone()))
-                }
-                ControlEvent::RecheckFailed { id: i, error } if *i == id => {
-                    Some(Err(Error::Msg(error.clone())))
-                }
-                _ => None,
-            },
-            Duration::from_secs(600),
-        )
-    }
-
     /// Non-blocking: one event if ready.
     pub fn try_recv_event(&self) -> Option<ControlEvent> {
         self.event_rx.lock().ok().and_then(|rx| rx.try_recv().ok())
@@ -200,25 +153,6 @@ impl ControlHandle {
         self.request_shutdown();
         while self.session_alive() {
             thread::sleep(Duration::from_millis(50));
-        }
-    }
-
-    fn wait_for<T>(
-        &self,
-        mut pred: impl FnMut(&ControlEvent) -> Option<Result<T>>,
-        timeout: Duration,
-    ) -> Result<T> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            for e in self.drain_events() {
-                if let Some(r) = pred(&e) {
-                    return r;
-                }
-            }
-            if Instant::now() >= deadline {
-                return Err(Error::Msg("control command timed out".into()));
-            }
-            thread::sleep(Duration::from_millis(10));
         }
     }
 }

@@ -63,9 +63,6 @@ struct LivePeer {
     /// Preferred: shared atomics updated from wire I/O.
     wire_up: Option<Arc<AtomicU64>>,
     wire_down: Option<Arc<AtomicU64>>,
-    /// Fallback atomics when no shared wire counters.
-    uploaded: AtomicU64,
-    downloaded: AtomicU64,
     connected_at: Instant,
     /// Set true when torrent is stopped so the peer task exits.
     cancel: Arc<AtomicBool>,
@@ -105,19 +102,18 @@ impl LivePeer {
         self.wire_up
             .as_ref()
             .map(|a| a.load(Ordering::Relaxed))
-            .unwrap_or_else(|| self.uploaded.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
     fn down(&self) -> u64 {
         self.wire_down
             .as_ref()
             .map(|a| a.load(Ordering::Relaxed))
-            .unwrap_or_else(|| self.downloaded.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 }
 
 struct TorrentBytes {
     up: AtomicU64,
-    down: AtomicU64,
 }
 
 /// Coalesced piece-have events for catalog bitfield durability.

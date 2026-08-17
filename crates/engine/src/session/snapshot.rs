@@ -255,10 +255,10 @@ impl super::SessionRuntime {
             let Some(t) = reg.get_id(id) else { continue };
             let (peer_count, _peer_up, peer_down) =
                 peer_stats.get(&id).copied().unwrap_or((0, 0, 0));
-            let (tb_up, tb_down) = bytes
+            let tb_up = bytes
                 .get(&id)
-                .map(|b| (b.up.load(Ordering::Relaxed), b.down.load(Ordering::Relaxed)))
-                .unwrap_or((0, 0));
+                .map(|b| b.up.load(Ordering::Relaxed))
+                .unwrap_or(0);
             // Lifetime upload = torrent_bytes only (seeded from catalog; +on every PIECE).
             // Never sum live peers — disconnects would drop the total.
             let lifetime_uploaded = tb_up;
@@ -282,7 +282,7 @@ impl super::SessionRuntime {
             let session_uploaded = lifetime_uploaded.saturating_sub(base_up);
             let session_downloaded = completed_bytes.saturating_sub(base_completed);
             // Instantaneous ↓ rate still tracks wire (includes waste); smoother.
-            let wire_down = peer_down.max(tb_down);
+            let wire_down = peer_down;
             total_up += session_uploaded;
             total_down += session_downloaded;
             total_wire_down += wire_down;

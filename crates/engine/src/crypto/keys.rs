@@ -2,6 +2,7 @@
 
 use sha1::{Digest, Sha1};
 
+#[cfg(test)]
 use super::rc4::Rc4;
 
 /// HASH(salt || key)

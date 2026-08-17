@@ -13,7 +13,6 @@ impl super::SessionRuntime {
         m.entry(id).or_insert_with(|| {
             Arc::new(TorrentBytes {
                 up: AtomicU64::new(0),
-                down: AtomicU64::new(0),
             })
         });
     }
@@ -37,7 +36,6 @@ impl super::SessionRuntime {
             .or_insert_with(|| {
                 Arc::new(TorrentBytes {
                     up: AtomicU64::new(catalog_up),
-                    down: AtomicU64::new(0),
                 })
             });
     }
@@ -147,20 +145,6 @@ impl super::SessionRuntime {
         crate::runtime::PeerWorkerPool::run_blocking(move || this.flush_piece_haves(only_id, force))
             .await
             .unwrap_or_default()
-    }
-
-    pub fn record_download(&self, torrent_id: i64, n: u64) {
-        self.ensure_byte_counters(torrent_id);
-        if let Some(b) = self.inner.torrent_bytes.read().get(&torrent_id) {
-            b.down.fetch_add(n, Ordering::Relaxed);
-        }
-    }
-
-    pub fn record_upload(&self, torrent_id: i64, n: u64) {
-        self.ensure_byte_counters(torrent_id);
-        if let Some(b) = self.inner.torrent_bytes.read().get(&torrent_id) {
-            b.up.fetch_add(n, Ordering::Relaxed);
-        }
     }
 
     /// Monotonic session upload counter for a torrent (source of truth for announce).

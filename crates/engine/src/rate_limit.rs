@@ -67,19 +67,6 @@ impl TokenBucket {
         }
     }
 
-    /// Bytes available without deducting.
-    fn available(&mut self, now: Instant) -> u64 {
-        self.refill(now);
-        self.tokens.max(0.0) as u64
-    }
-
-    fn deduct(&mut self, n: u64) {
-        if n == 0 {
-            return;
-        }
-        self.tokens = (self.tokens - n as f64).max(0.0);
-    }
-
     /// Deduct up to `want`; returns granted amount.
     fn try_consume(&mut self, want: u64, now: Instant) -> u64 {
         if want == 0 {
@@ -122,25 +109,6 @@ impl WireRateLimiter {
         self.down_cap.load(Ordering::Relaxed) == 0
     }
 
-    /// How many of `want` payload bytes may be sent now (peek; does not deduct).
-    /// Unlimited → `want` with no clock/mutex.
-    #[inline]
-    pub fn allow_upload(&self, want: u64) -> u64 {
-        if want == 0 || self.upload_unlimited() {
-            return want;
-        }
-        self.up.lock().available(Instant::now()).min(want)
-    }
-
-    /// Deduct after bytes actually left the socket. No-op if unlimited.
-    #[inline]
-    pub fn commit_upload(&self, n: u64) {
-        if n == 0 || self.upload_unlimited() {
-            return;
-        }
-        self.up.lock().deduct(n);
-    }
-
     /// Reserve upload tokens for a full block before starting the PIECE on the wire.
     /// Unlimited → `want`. Partial grant means "not enough for this block now".
     #[inline]
@@ -178,15 +146,6 @@ impl WireRateLimiter {
         }
         let mut b = self.down.lock();
         b.tokens = (b.tokens + n as f64).min(b.capacity.max(n as f64));
-    }
-
-    /// True if at least `need` download tokens are available (peek).
-    #[inline]
-    pub fn allow_download(&self, need: u64) -> bool {
-        if need == 0 || self.download_unlimited() {
-            return true;
-        }
-        self.down.lock().available(Instant::now()) >= need
     }
 
     /// How long until `need` download tokens are available (for Request pacing).
@@ -227,24 +186,21 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn unlimited_allow_is_identity() {
+    fn unlimited_try_consume_is_identity() {
         let lim = WireRateLimiter::new(0, 0);
-        assert_eq!(lim.allow_upload(1_000_000), 1_000_000);
-        lim.commit_upload(1_000_000); // no-op
+        assert_eq!(lim.try_consume_upload(1_000_000), 1_000_000);
         assert_eq!(lim.try_consume_download(999), 999);
-        assert!(lim.allow_download(1));
     }
 
     #[test]
     fn upload_bucket_caps_and_refills() {
         let lim = WireRateLimiter::new(1000, 0); // 1 KiB/s
                                                  // Full burst = 1500 bytes
-        let a = lim.allow_upload(10_000);
+        let a = lim.try_consume_upload(10_000);
         assert!((1000..=1500).contains(&a), "burst grant {a}");
-        lim.commit_upload(a);
-        assert_eq!(lim.allow_upload(10_000), 0);
+        assert_eq!(lim.try_consume_upload(10_000), 0);
         thread::sleep(Duration::from_millis(200));
-        let b = lim.allow_upload(10_000);
+        let b = lim.try_consume_upload(10_000);
         assert!(b > 0, "should refill after sleep, got {b}");
     }
 
@@ -263,7 +219,7 @@ mod tests {
         assert!(!lim.upload_unlimited());
         lim.set_caps(0, 0);
         assert!(lim.upload_unlimited());
-        assert_eq!(lim.allow_upload(9_999), 9_999);
+        assert_eq!(lim.try_consume_upload(9_999), 9_999);
     }
 
     #[test]
