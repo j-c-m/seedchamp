@@ -1,4 +1,4 @@
-//! Hashing: recheck and leech piece verify (SHA-1).
+//! Serial torrent recheck (SHA-1). Leech piece verify is `runtime/hash_worker`.
 
 pub mod recheck;
 

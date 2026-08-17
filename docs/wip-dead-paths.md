@@ -286,22 +286,22 @@ Update [design.md](design.md) / [domains.md](domains.md) / rustdoc to match the 
 
 | Done | Claim | Where | Code now |
 |------|-------|-------|----------|
-| | TUI list is paged SQL / “5k rows, no long hitch” | design §7, §10 | `Catalog::list_torrents_filtered` loads every non-deleted row. `control/reader.rs` sends a full `CatalogList`. PgUp/PgDn scroll memory. |
-| | Refresh 2–5 Hz; 10–20 Hz focused torrent | design §7 | `SNAPSHOT_INTERVAL` 1s, `SQL_INTERVAL` 5s (`crates/tui/src/app/events.rs`). No focused high-Hz path. |
-| | Hot activate on inbound / recheck; idle evict | design §4 | `start_torrent` / `sync_want_start` load hot. Only `stop_torrent` removes. Recheck updates catalog only. Inbound looks up existing hot; cold infohash stays cold. |
-| | Piece hashes mmap/blob | design §4 | `Catalog::load_piece_hashes` → `Vec<u8>`; hot holds `Arc<Vec<u8>>`. |
-| | `--upload-backend` general CLI | design §5, domains §3 | Clap flag only on `seedchamp bench swarm`. `serve` / TUI: `[upload].backend` + `SEEDCHAMP_UPLOAD_BACKEND`. |
-| | Import scan is “48-char hex + `.torrent`” | design §8 | `is_infohash_torrent_name`: **40 hex** + `.torrent` = 48 total (`crates/import/src/common.rs`). Matches `rtorrent-session.md`. |
-| | Import optional payload existence/size check | design §8 step 7 | Import inserts sidecars. No payload `stat`. |
-| | SQLite file modes 0600 | design §11 | `Connection::open` only. No `chmod`. |
-| | Config section list | design §9 | Omits `[catalog]` (`soft_delete_purge_days`). |
-| | Palette relocate / import / export | design §7 | Relocate is **Ctrl-O** + `Mode::Relocate` only. No `:relocate`. Palette has no import/export. |
-| | BEP 6 Suggest recv | design §5 | `on_suggest` stores; nothing reads `suggested`. We never send Suggest. |
-| | `hash/` does leech verify | `hash.rs` rustdoc | Leech SHA-1 is `runtime/hash_worker.rs`. `hash/` is serial recheck. |
-| | Staging assemble → SHA-1 → write | `staging.rs` / `staging/pool.rs` rustdoc | Staging assembles only. |
-| | Hash read is `read_at` | design §6 table | Recheck/hash is blocking `pread` via `hash_piece_windowed`. Compio `read_at` is **seed fill**. |
-| | Recheck is sequential windowed reads | design §6 | TUI/control: `recheck_torrent_with_pool`. CLI: sequential `recheck_torrent`. |
-| | Watch template `interval_secs=1` | `config.rs` template | Default is 5. |
+| x | TUI list is paged SQL / “5k rows, no long hitch” | design §7, §10 | Docs match the tree. |
+| x | Refresh 2–5 Hz; 10–20 Hz focused torrent | design §7 | Docs: 1s snapshot / 5s list. |
+| x | Hot activate on inbound / recheck; idle evict | design §4 | Docs: start/stop only. |
+| x | Piece hashes mmap/blob | design §4 | Docs: `SELECT` → `Vec<u8>`. |
+| x | `--upload-backend` general CLI | design §5, domains §3 | Docs: bench swarm only. |
+| x | Import scan is “48-char hex + `.torrent`” | design §8 | Docs: 40 hex + `.torrent`. |
+| x | Import optional payload existence/size check | design §8 step 7 | Removed from import steps. |
+| x | SQLite file modes 0600 | design §11 | Docs: default file mode. |
+| x | Config section list | design §9 | Includes `[catalog]`; dropped `[logging]`. |
+| x | Palette relocate / import / export | design §7 | Docs: Ctrl-O; CLI import/export. |
+| keep — docs/wip-bep6-suggest.md | BEP 6 Suggest recv | design §5 | Stored, not honored. Follow-up doc. |
+| x | `hash/` does leech verify | `hash.rs` rustdoc | Serial recheck only. |
+| x | Staging assemble → SHA-1 → write | `staging.rs` / `staging/pool.rs` rustdoc | Assemble only. |
+| x | Hash read is `read_at` | design §6 table | Docs: windowed `pread`. |
+| x | Recheck is sequential windowed reads | design §6 | Docs: TUI HashPool; CLI sequential. |
+| x | Watch template `interval_secs=1` | `config.rs` template | Template now 5. |
 
 When you edit design/domains, follow AGENTS.md (those files change when the described architecture changes). This punch list is not architecture.
 

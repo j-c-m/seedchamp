@@ -138,12 +138,12 @@ TUI (UI thread)  →  Control plane  →  accept (seedchamp-acc)  →  least-pee
 | Always cold (DB only) | Hot when needed |
 |----------------------|-----------------|
 | Name, paths, sizes, trackers | Peer connections + bitfield copy |
-| Piece hashes (mmap/blob on demand) | Leech staging pieces |
+| Piece hashes (`SELECT` → `Vec<u8>`) | Leech staging pieces |
 | Peer cache | Active unchoke set |
 | Aggregate stats | Open FDs / io_uring slots |
 
-**Activate (hot):** `want_start` / start, inbound or outbound peer activity, or recheck.  
-**Deactivate:** stop (`want_start` clear), idle with no peers, flush stats to SQLite.
+**Activate (hot):** `start` / `sync_want_start` loads the torrent into `HotRegistry`.  
+**Deactivate:** `stop` removes it and flushes stats. Recheck and inbound peers do not load a cold torrent. There is no idle-peer eviction.
 
 ---
 
@@ -154,7 +154,7 @@ TUI (UI thread)  →  Control plane  →  accept (seedchamp-acc)  →  least-pee
 - BEP 3 core (handshake, bitfield, request/piece/cancel, choke/unchoke, interested)
 - MSE/PE + RC4 on all post-handshake wire bytes when selected
 - BEP 10 extension protocol
-- BEP 6 Fast (Have All/None, Reject Request, Allowed Fast, Suggest recv)
+- BEP 6 Fast (Have All/None, Reject Request, Allowed Fast). Suggest is parsed and stored; the picker does not honor it yet — [wip-bep6-suggest.md](wip-bep6-suggest.md).
 - Multi-tracker (BEP 12)
 - Compact peer lists
 
@@ -200,7 +200,7 @@ peers → (decrypt if RC4) → block assembler (per piece) → staging RAM
 
 ### Seed path (`[upload].backend`)
 
-Config / env / CLI: `auto` \| `pread` \| `compio` (`SEEDCHAMP_UPLOAD_BACKEND`, `--upload-backend`). Detail: [domains.md](domains.md).
+Config / env: `auto` \| `pread` \| `compio` (`[upload].backend`, `SEEDCHAMP_UPLOAD_BACKEND`). CLI `--upload-backend` exists only on `seedchamp bench swarm`. Detail: [domains.md](domains.md).
 
 | Case | Path |
 |------|------|
@@ -244,10 +244,10 @@ Disk path (leech writes):
 
 | Op | API |
 |----|-----|
-| Read for hash | `read_at` / windowed stream |
+| Read for hash | blocking `pread` via `hash_piece_windowed` (256 KiB) |
 | Write verified piece | `DiskWorker::submit_write` |
-| Seed | `[upload].backend`; Compio fill via per-worker TLS `FdCache` |
-| Recheck | sequential windowed reads |
+| Seed | `[upload].backend`; Compio `read_at` or TLS `pread` via per-worker `FdCache` |
+| Recheck | TUI/control: `HashPool`. CLI: sequential `recheck_torrent`. Both windowed `pread`. |
 
 **FD policy:** open on demand; idle close; max open FDs.
 
@@ -260,29 +260,29 @@ Disk path (leech writes):
 ### Stack
 
 - **ratatui** + **crossterm**
-- Engine control via async channels (non-Tokio; flume / oneshot / Compio)
+- Engine control via `std::sync::mpsc` (control plane) + Compio peer I/O
 - Non-blocking: UI never waits on SQLite write; shows last snapshot
 
 ### Screens
 
-1. **Torrent list** — filter/sort; virtualized rows (SQL page / cache)
+1. **Torrent list** — filter/sort; full catalog `Vec` from the reader thread (not paged SQL)
 2. **Torrent detail** — files, peers, trackers, transfer
 3. **Status** (`s`) — process / engine / filesystem metrics (sampled while open)
 4. **Activity log**
-5. Session import/export is primarily **CLI** (`seedchamp import|export rtorrent|transmission`); palette may expose related ops
+5. Session import/export is **CLI** (`seedchamp import|export rtorrent|transmission`)
 
 ### Interaction model
 
 - Arrows / `j` `k`; documented help (`?`)
 - **`Ctrl+s`** start/stop selected torrent (`want_start`); bare **`s`** = Status screen
 - **Ctrl-D** soft-delete / **`:remove`** hard-remove: stopped torrents only; list row drops immediately; catalog mutate is async; stale `CatalogList` cannot resurrect pending ids until SoftDeleted/Removed or *Failed
-- Command palette (`:`) for power ops (recheck, relocate, limits, …)
+- Command palette (`:`) for power ops (recheck, limits, …). Relocate is **Ctrl-O** only (no `:relocate`).
 - **Ctrl-O relocate** uses the leech_cache handoff path: publish dest (hardlink/copy, source stays) → catalog `data_root` → live layout swap → unpublish this torrent's source files (wipe the tree only for `{leech_cache}/{infohash}`). Staged torrents retarget `home_root` only. Seed fill during the window can open either path; ENOENT retries once with a fresh layout.
 
 ### Performance
 
 - List does not load all peer lists
-- Refresh: 2–5 Hz full stats; 10–20 Hz rates for focused torrent
+- Snapshot every **1 s**; catalog list every **5 s** (TUI `SNAPSHOT_INTERVAL` / `SQL_INTERVAL`)
 - Indexes on `state`, `complete`, `name`
 
 ---
@@ -306,14 +306,13 @@ Filenames use **uppercase** hex (`DownloadStorer` / `hash_string_to_hex`). Impor
 
 | Step | Action |
 |------|--------|
-| 1 | Scan `*.torrent` (48-char hex + `.torrent`) |
+| 1 | Scan `*.torrent` (40 hex + `.torrent` = 48 chars total) |
 | 2 | Parse metainfo → infohash, files, piece length, hashes |
 | 3 | Parse `.libtorrent_resume` if present → bitfield, priorities, trackers extras |
-| 4 | Parse `.rtorrent` → directory, tied file, custom keys (best-effort map) |
+| 4 | Parse `.rtorrent` → directory, timestamps, totals, key |
 | 5 | Resolve data path (`directory` / `directory_base`; strip multi-file torrent name) |
 | 6 | Insert SQLite (transaction per torrent or batches); store metainfo blob |
-| 7 | Optional: quick file existence / size check without full recheck |
-| 8 | Report summary: imported / skipped / errors |
+| 7 | Report summary: imported / skipped / errors |
 
 ### Export (`seedchamp export rtorrent|transmission <session_dir> --all`)
 
@@ -387,7 +386,7 @@ Config: `~/.config/seedchamp/config.toml` (`seedchamp config init|show`).
 Precedence: CLI → `SEEDCHAMP_*` → file → defaults.
 Limits are config-primary (applied to catalog on start). Sections:
 `[paths]`, `[network]`, `[upload]`, `[swarm]`, `[disk]`,
-`[limits]`, `[logging]`, `[tracker]`, `[watch]`, `[tui]`.
+`[limits]`, `[tracker]`, `[watch]`, `[tui]`, `[catalog]`.
 
 Data: `~/.local/share/seedchamp/` unless overridden.
 
@@ -400,7 +399,7 @@ Data: `~/.local/share/seedchamp/` unless overridden.
 | 5k complete seeds, 0 peers | RSS in the **100–150 MB** class |
 | 5k seeds, 50 active peers | RSS from peer sessions + staging, not catalog |
 | Leech high-rate LAN | Hash/disk bound when disk allows |
-| TUI list 5k rows | Paged SQL; no long hitch on fetch |
+| TUI list 5k rows | Full list load on the catalog reader; scroll in memory |
 | Import 1k torrents | Transactional batches |
 
 ---
@@ -409,7 +408,7 @@ Data: `~/.local/share/seedchamp/` unless overridden.
 
 - Bind listen explicitly
 - Paths from torrents stay under `data_root`
-- SQLite file modes 0600
+- SQLite opened with default file mode (no chmod 0600)
 - No peer-influenced paths for hash reload
 - Private torrents: no DHT/PEX (out of scope)
 
