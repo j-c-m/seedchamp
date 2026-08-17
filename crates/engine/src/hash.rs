@@ -4,6 +4,5 @@ pub mod recheck;
 
 pub use recheck::{
     emit_start_progress, finish_recheck, maybe_progress, prepare_recheck, progress_step,
-    recheck_torrent, recheck_torrent_with_progress, RecheckPrepared, RecheckProgress,
-    RecheckReport,
+    recheck_torrent, RecheckPrepared, RecheckProgress, RecheckReport,
 };

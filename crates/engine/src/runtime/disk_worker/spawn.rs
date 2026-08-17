@@ -35,10 +35,6 @@ pub(super) enum BackendWant {
     Aio,
 }
 
-pub(super) fn backend_want_string_from_env() -> String {
-    std::env::var("SEEDCHAMP_DISK_BACKEND").unwrap_or_else(|_| "auto".into())
-}
-
 pub(super) fn parse_backend_want(s: &str) -> Result<BackendWant> {
     match s.trim().to_ascii_lowercase().as_str() {
         "" | "auto" => Ok(BackendWant::Auto),

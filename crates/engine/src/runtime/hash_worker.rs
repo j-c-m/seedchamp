@@ -119,11 +119,7 @@ impl Drop for HashThreadGuard {
 }
 
 impl HashPool {
-    /// Spawn N hash workers (default = CPU count). Verified leech pieces go to `disk`.
-    pub fn spawn(disk: Arc<DiskWorker>) -> Result<Self> {
-        Self::spawn_n(disk, default_hash_workers())
-    }
-
+    /// Spawn N hash workers. Verified leech pieces go to `disk`.
     pub fn spawn_n(disk: Arc<DiskWorker>, n: usize) -> Result<Self> {
         let n = n.max(1);
         // Separate queues: leech drained before recheck.
@@ -323,6 +319,7 @@ mod tests {
     use super::*;
     use crate::disk::spans::FileLayout;
     use crate::disk::{ensure_storage, read_piece, FdCache};
+    use crate::runtime::DEFAULT_DISK_DEPTH;
     use crate::staging::BLOCK_SIZE;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -354,7 +351,8 @@ mod tests {
         let layout = one_piece_layout(dir.path(), len);
         // No ensure_storage — discard must not need the file.
 
-        let disk = Arc::new(DiskWorker::spawn_with_discard(true).unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(true, "thread", DEFAULT_DISK_DEPTH).unwrap());
         assert!(disk.discard_writes());
         let pool = HashPool::spawn_n(disk, 2).unwrap();
         let layout = Arc::new(layout);
@@ -390,7 +388,8 @@ mod tests {
         let layout = one_piece_layout(dir.path(), len);
         ensure_storage(&layout).unwrap();
 
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let pool = HashPool::spawn_n(disk, 4).unwrap();
         assert_eq!(pool.workers(), 4);
 
@@ -462,7 +461,8 @@ mod tests {
         // Write file so recheck can read (will still be slow-ish with many jobs).
         std::fs::write(dir.path().join("x"), &data).unwrap();
 
-        let disk = Arc::new(DiskWorker::spawn().unwrap());
+        let disk =
+            Arc::new(DiskWorker::spawn_with_options(false, "thread", DEFAULT_DISK_DEPTH).unwrap());
         let pool = HashPool::spawn_n(disk, 1).unwrap();
         let layout = Arc::new(layout);
 
