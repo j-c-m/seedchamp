@@ -55,6 +55,8 @@ pub struct RuntimeConfig {
     /// Cap concurrent announce jobs (torrent-level). Bounds in-flight async
     /// announce tasks when many torrents share a host. **0** = unlimited (not recommended).
     pub max_inflight_announces: u32,
+    /// Tracker `numwant` (peers requested per announce).
+    pub numwant: u32,
     /// Azureus-style peer id prefix bytes (typically 8). Rest of 20 is random.
     /// Default fixed `-sc0001-` (seedchamp). Override via config / env.
     pub peer_id_prefix: Vec<u8>,
@@ -95,6 +97,7 @@ impl Default for RuntimeConfig {
             max_concurrent_per_host: 2,
             startup_stagger_ms: 50,
             max_inflight_announces: 16,
+            numwant: 50,
             peer_id_prefix: crate::library::DEFAULT_PEER_ID_PREFIX.to_vec(),
             http_user_agent: crate::tracker::tracker_user_agent().into(),
             ltep_client: crate::library::default_ltep_client(),
@@ -152,6 +155,7 @@ impl RuntimeConfig {
             max_concurrent_per_host: cfg.tracker.max_concurrent_per_host,
             startup_stagger_ms: cfg.tracker.startup_stagger_ms,
             max_inflight_announces: cfg.tracker.max_inflight_announces,
+            numwant: cfg.tracker.numwant,
             peer_id_prefix: crate::library::resolve_peer_id_prefix(&cfg.network.peer_id_prefix),
             http_user_agent: {
                 let ua = cfg.network.http_user_agent.trim();

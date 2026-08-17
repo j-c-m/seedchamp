@@ -143,6 +143,7 @@ impl super::SessionRuntime {
                 let port = self.inner.cfg.listen.port();
                 let limiter = self.inner.host_limiter.clone();
                 let user_agent = self.inner.cfg.http_user_agent.clone();
+                let numwant = self.inner.cfg.numwant;
                 let (uploaded, downloaded) = self.announce_transfer_totals(id);
                 let t = t.clone();
                 let _ = self.pool.spawn_tracker(move || {
@@ -157,6 +158,7 @@ impl super::SessionRuntime {
                             downloaded,
                             &limiter,
                             &user_agent,
+                            numwant,
                         )
                         .await;
                     }
