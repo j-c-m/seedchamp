@@ -133,8 +133,6 @@ pub struct FastSession {
     pub allowed_from_peer: HashSet<u32>,
     /// Pieces we advertised as Allowed Fast to the remote.
     pub allowed_to_peer: HashSet<u32>,
-    /// Latest Suggest Piece indices from peer (advisory).
-    pub suggested: Vec<u32>,
 }
 
 impl FastSession {
@@ -147,15 +145,6 @@ impl FastSession {
 
     pub fn on_allowed_fast(&mut self, index: u32) {
         self.allowed_from_peer.insert(index);
-    }
-
-    pub fn on_suggest(&mut self, index: u32) {
-        if !self.suggested.contains(&index) {
-            self.suggested.push(index);
-            if self.suggested.len() > 32 {
-                self.suggested.remove(0);
-            }
-        }
     }
 
     pub fn peer_allows_while_choked(&self, index: u32) -> bool {
