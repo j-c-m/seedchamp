@@ -85,6 +85,10 @@ impl FdCache {
         self.map.len() + self.compio.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty() && self.compio.is_empty()
+    }
+
     /// Open or reuse a read-only file (or an existing R/W handle).
     pub fn open_read(&mut self, path: &Path) -> Result<&File> {
         self.open_with(path, false)
