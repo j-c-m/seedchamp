@@ -180,6 +180,29 @@ impl PieceBufferPool {
         }
         // else drop buf (orphan release after capacity shrink / replace)
     }
+
+    /// Piece handed to hash/disk: drop the budget slot, caller keeps `buf`.
+    ///
+    /// Writes no longer starve leech on large-piece torrents (16 MiB × disk
+    /// depth would otherwise consume the whole freelist).
+    pub fn detach(&self) {
+        let mut g = self.inner.lock();
+        if g.outstanding > 0 {
+            g.outstanding -= 1;
+        }
+    }
+
+    /// Recycle a buffer previously [`detach`]ed. Does not change `outstanding`.
+    pub fn donate(&self, mut buf: Vec<u8>) {
+        let need = self.piece_length as usize;
+        if buf.len() != need {
+            buf.resize(need, 0);
+        }
+        let mut g = self.inner.lock();
+        if g.free.len() + g.outstanding < self.capacity {
+            g.free.push(buf);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +259,21 @@ mod tests {
     fn tiny_limit_still_min_two() {
         let n = buffer_count_for_limit(16 * 1024 * 1024, 1);
         assert_eq!(n, 2); // floor 2 × piece
+    }
+
+    #[test]
+    fn detach_frees_budget_donate_recycles() {
+        let pool = PieceBufferPool::new(1024, 4 * 1024); // cap 4
+        let a = pool.try_acquire().unwrap();
+        let b = pool.try_acquire().unwrap();
+        assert_eq!(pool.available(), 2);
+        pool.detach();
+        assert_eq!(pool.available(), 3);
+        pool.donate(a);
+        assert_eq!(pool.available(), 3);
+        assert_eq!(pool.freelist_len(), 1);
+        pool.release(b);
+        assert_eq!(pool.available(), 4);
+        assert_eq!(pool.freelist_len(), 2);
     }
 }

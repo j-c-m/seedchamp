@@ -13,7 +13,9 @@
 //!   (writers block new readers; the outer read never releases).
 //! - Under lock: copy bitfields / counters; release before scan, callback, or second hot lock.
 //!   Long holds stall `mark_have` and park peer I/O workers.
-//! - `pick_rarest_piece` snapshots then drops **before** the eligible walk and `try_claim`.
+//! - `pick_rarest_piece` snapshots (including `in_flight`) then drops **before**
+//!   the eligible walk and `try_claim`. Outside endgame, claimed pieces are not
+//!   candidates.
 //! - Never hold `pieces` while taking `wanted_bf` write (or the reverse).
 //! - `download_missing` / `have_count` atomics are lock-free for TUI snapshots; use them
 //!   instead of re-locking `pieces` while leeching (mark_have writes `pieces` continuously).

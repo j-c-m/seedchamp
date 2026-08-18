@@ -461,3 +461,56 @@ fn turning_file_on_reopens_leech_need() {
     // Priority change does not alter full-torrent left.
     assert_eq!(t.left_bytes(), 32);
 }
+
+/// Large torrent, most remaining pieces exclusively claimed: pick must still
+/// find the unclaimed ones. Regression: a 256-probe sample kept claimed
+/// pieces in the 32-candidate cap, skipped the exact walk (missing > 32),
+/// and idle peers returned None while work remained.
+#[test]
+fn pick_rarest_skips_claimed_on_large_torrent() {
+    const PC: u32 = 1024;
+    let plen = 32u32;
+    let layout = StorageLayout {
+        data_root: PathBuf::from("/tmp"),
+        piece_length: plen,
+        piece_count: PC,
+        total_size: PC as u64 * plen as u64,
+        files: vec![FileLayout {
+            path: PathBuf::from("big"),
+            size: PC as u64 * plen as u64,
+            offset: 0,
+            priority: 1,
+        }],
+    };
+    let hashes = vec![0u8; PC as usize * 20];
+    let t = HotTorrent::new_empty(1, [0u8; 20], "big".into(), layout, hashes);
+    // 40 missing: claim 38, leave 17 and 900 free.
+    for i in 0..PC {
+        if i != 17 && i != 900 && !(100..138).contains(&i) {
+            t.mark_have(i);
+        }
+    }
+    for i in 100..138 {
+        assert!(t.try_claim_piece(i, false));
+    }
+    assert_eq!(t.missing_piece_count(), 40);
+    let peer_bf = all_set_bitfield(PC);
+    for _ in 0..50 {
+        let pick = t
+            .pick_rarest_piece(
+                &peer_bf,
+                |_| false,
+                |_| false,
+                |i| t.try_claim_piece(i, false),
+                |_| true,
+                false,
+            )
+            .expect("unclaimed piece on large torrent");
+        assert!(
+            pick.0 == 17 || pick.0 == 900,
+            "picked claimed or have piece {}",
+            pick.0
+        );
+        t.release_piece_claim(pick.0);
+    }
+}

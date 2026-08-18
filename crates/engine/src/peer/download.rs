@@ -40,6 +40,17 @@ impl PeerPieceClaims {
         }
         true
     }
+
+    /// Drop a claim that never made it into staging (try_start lost the buffer).
+    pub(crate) fn release(&self, index: u32) {
+        let held = match self.held.lock() {
+            Ok(mut h) => h.remove(&index),
+            Err(_) => false,
+        };
+        if held && !self.torrent.has_piece(index) {
+            self.torrent.release_piece_claim(index);
+        }
+    }
 }
 
 impl Drop for PeerPieceClaims {
@@ -239,6 +250,7 @@ impl PeerDownload {
                 )
             },
             may,
+            |i| claims.release(i),
         );
         if reqs.is_empty() {
             // Refund full pre-consume when limited.
@@ -561,5 +573,18 @@ mod tests {
         );
         assert_eq!(pick.map(|p| p.0), Some(1));
         assert!(suggested.is_empty());
+    }
+
+    #[test]
+    fn claim_release_after_failed_start_is_reusable() {
+        let t = torrent();
+        let claims = PeerPieceClaims::new(Arc::clone(&t));
+        assert!(claims.try_claim(0, false));
+        assert!(!t.try_claim_piece(0, false), "held exclusively");
+        claims.release(0);
+        assert!(
+            t.try_claim_piece(0, false),
+            "released claim must be reusable by another peer"
+        );
     }
 }

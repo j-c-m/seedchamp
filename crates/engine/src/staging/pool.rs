@@ -334,16 +334,21 @@ impl StagingPool {
         let Slot::Assembling { piece, buf } = self.slots.swap_remove(pos) else {
             return None;
         };
+        // Hash/disk owns `buf`. Free the staging slot so other peers can leech
+        // while this piece verifies and writes (16 MiB × disk depth=32 is 512 MiB).
+        if let Some(ref pool) = self.pool {
+            pool.detach();
+        }
         self.slots.push(Slot::Hashing { index });
         Some((piece.length, buf))
     }
 
-    /// Return a buffer after hash/disk to the shared freelist.
+    /// Recycle a buffer after hash/disk (already detached from the budget).
     pub fn reclaim(&mut self, index: u32, data: Vec<u8>) {
         self.slots
             .retain(|s| !matches!(s, Slot::Hashing { index: i } if *i == index));
         if let Some(ref pool) = self.pool {
-            pool.release(data);
+            pool.donate(data);
         }
         // else drop data (no pool)
     }
@@ -448,12 +453,16 @@ impl StagingPool {
     ///
     /// When `endgame` is true, refill aggressively (no low-water early return) so
     /// idle unchoked peers pile onto multi-claimed last pieces immediately.
+    ///
+    /// `start_piece` must claim the index it returns. If `try_start` then
+    /// fails (freelist race), `abort_start` releases that claim.
     pub fn take_requests(
         &mut self,
         pipeline: usize,
         endgame: bool,
         mut start_piece: impl FnMut(&Self) -> Option<(u32, u32)>,
         mut may_request_piece: impl FnMut(u32) -> bool,
+        mut abort_start: impl FnMut(u32),
     ) -> Vec<(u32, u32, u32)> {
         let pipeline = pipeline.max(1);
         // Steady: only refill when outstanding drops to half pipeline.
@@ -464,6 +473,7 @@ impl StagingPool {
                 return Vec::new();
             }
         }
+        let max_pieces = max_assembling_pieces(pipeline, self.piece_length, self.capacity());
         let mut out = Vec::with_capacity(pipeline.saturating_sub(self.total_outstanding()));
         let max_slots = self.slots.len();
         for _ in 0..(pipeline * 4 + max_slots + 8) {
@@ -493,7 +503,7 @@ impl StagingPool {
             if self.total_outstanding() >= pipeline {
                 break;
             }
-            if !self.can_start_more() {
+            if !self.can_start_more() || self.len() >= max_pieces {
                 break;
             }
             let Some((index, plen)) = start_piece(self) else {
@@ -503,6 +513,7 @@ impl StagingPool {
                 break;
             }
             if !self.try_start(index, plen) {
+                abort_start(index);
                 break;
             }
             if !queued_from_existing {
@@ -516,6 +527,30 @@ impl StagingPool {
             }
         }
         out
+    }
+}
+
+/// Max assembling pieces one peer may hold (hash/write does not count).
+///
+/// Enough to fill `pipeline` blocks, but never more than `1/16` of the
+/// shared freelist. Pieces ≥4 MiB cap at 2 — one 16 MiB piece is already
+/// 1024 blocks; a 1 GiB pool then runs ~32 peers instead of a handful.
+pub fn max_assembling_pieces(pipeline: usize, piece_length: u32, capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    let blocks = num_blocks(piece_length).max(1);
+    let for_pipe = pipeline.div_ceil(blocks).max(1);
+    const MIN_PEER_SPREAD: usize = 16;
+    let fair = capacity.div_ceil(MIN_PEER_SPREAD).max(1);
+    let n = for_pipe.min(fair);
+    // 4 MiB = 256 blocks. Two such pieces cover any realistic BDP.
+    const LARGE_PIECE_BLOCKS: usize = 256;
+    const LARGE_PIECE_MAX: usize = 2;
+    if blocks >= LARGE_PIECE_BLOCKS {
+        n.min(LARGE_PIECE_MAX)
+    } else {
+        n
     }
 }
 
@@ -598,14 +633,16 @@ mod tests {
         let len = BLOCK_SIZE * 3;
         let mut pool = test_staging(1, len);
         assert!(pool.try_start(0, len));
-        let reqs = pool.take_requests(3, true, |_| None, |_| true);
+        let reqs = pool.take_requests(3, true, |_| None, |_| true, |_| {});
         assert_eq!(reqs.len(), 3);
         assert_eq!(pool.total_outstanding(), 3);
         assert!(pool.clear_request(0, BLOCK_SIZE, BLOCK_SIZE));
         assert_eq!(pool.total_outstanding(), 2);
-        let again = pool.take_requests(3, true, |_| None, |_| true);
+        let again = pool.take_requests(3, true, |_| None, |_| true, |_| {});
         assert_eq!(again, vec![(0, BLOCK_SIZE, BLOCK_SIZE)]);
-        assert!(pool.take_requests(3, true, |_| None, |_| true).is_empty());
+        assert!(pool
+            .take_requests(3, true, |_| None, |_| true, |_| {})
+            .is_empty());
         assert!(!pool.clear_request(0, 0, 1));
         assert_eq!(pool.total_outstanding(), 3);
     }
@@ -638,10 +675,10 @@ mod tests {
             Some(true)
         );
         let (_plen, buf) = pool.take_for_hash(0).unwrap();
-        assert!(!pool.can_start_more());
-        pool.reclaim(0, buf);
+        // Hash/disk no longer holds the staging slot — next piece can start.
         assert!(pool.can_start_more());
         assert!(pool.try_start(2, plen));
+        pool.reclaim(0, buf);
     }
 
     #[test]
@@ -649,7 +686,7 @@ mod tests {
         let len = BLOCK_SIZE * 2 + 100;
         let mut pool = test_staging(1, len);
         assert!(pool.try_start(0, len));
-        let reqs = pool.take_requests(10, true, |_| None, |_| true);
+        let reqs = pool.take_requests(10, true, |_| None, |_| true, |_| {});
         assert_eq!(
             reqs,
             vec![
@@ -658,15 +695,21 @@ mod tests {
                 (0, 2 * BLOCK_SIZE, 100),
             ]
         );
-        assert!(pool.take_requests(10, true, |_| None, |_| true).is_empty());
+        assert!(pool
+            .take_requests(10, true, |_| None, |_| true, |_| {})
+            .is_empty());
         pool.enable_endgame();
-        assert!(pool.take_requests(10, true, |_| None, |_| true).is_empty());
+        assert!(pool
+            .take_requests(10, true, |_| None, |_| true, |_| {})
+            .is_empty());
         pool.requeue_timed_out();
-        let again = pool.take_requests(10, true, |_| None, |_| true);
+        let again = pool.take_requests(10, true, |_| None, |_| true, |_| {});
         assert_eq!(again[0], (0, 0, BLOCK_SIZE));
         assert_eq!(again[1].1, BLOCK_SIZE);
         assert_eq!(again.len(), 3);
-        assert!(pool.take_requests(10, true, |_| None, |_| true).is_empty());
+        assert!(pool
+            .take_requests(10, true, |_| None, |_| true, |_| {})
+            .is_empty());
     }
 
     #[test]
@@ -686,6 +729,7 @@ mod tests {
                 Some((idx, plen))
             },
             |_| true,
+            |_| {},
         );
         assert_eq!(reqs.len(), 32, "should queue full pipeline in one shot");
         assert_eq!(pool.total_outstanding(), 32);
@@ -694,7 +738,7 @@ mod tests {
             assert!(seen.insert((*i, *b)), "duplicate request {i}:{b}");
             assert_eq!(*l, BLOCK_SIZE);
         }
-        let more = pool.take_requests(32, false, |_| Some((99, plen)), |_| true);
+        let more = pool.take_requests(32, false, |_| Some((99, plen)), |_| true, |_| {});
         assert!(more.is_empty());
     }
 
@@ -704,7 +748,7 @@ mod tests {
         let mut pool = test_staging(4, plen);
         assert!(pool.try_start(0, plen));
         assert!(pool.try_start(1, plen));
-        let reqs = pool.take_requests(8, false, |_| None, |i| i == 1);
+        let reqs = pool.take_requests(8, false, |_| None, |i| i == 1, |_| {});
         assert!(!reqs.is_empty());
         assert!(reqs.iter().all(|(i, _, _)| *i == 1));
         // Piece 0 staged but not allowed — no outstanding on it.
@@ -727,8 +771,8 @@ mod tests {
         assert_eq!(pool.ingest_if_staged(0, 0, &data).unwrap(), Some(true));
         let (len, buf) = pool.take_for_hash(0).unwrap();
         assert_eq!(len, plen);
-        // Hash holds one buffer; one remains on freelist.
-        assert_eq!(pool.free_slots(), 1);
+        // Detached from staging budget; hash/disk owns `buf`.
+        assert_eq!(pool.free_slots(), 2);
         pool.reclaim(0, buf);
         assert_eq!(pool.free_slots(), 2);
         assert!(pool.try_start(1, plen));
@@ -815,5 +859,69 @@ mod tests {
         let (_, ingest_buf) = via_ingest.take_for_hash(0).unwrap();
 
         assert_eq!(direct_buf, ingest_buf);
+    }
+
+    #[test]
+    fn assembling_cap_spreads_large_piece_budget() {
+        // 16 MiB pieces, 256 MiB budget → 16 buffers. A 8192-block pipe
+        // would otherwise start 8 pieces on one peer.
+        assert_eq!(
+            max_assembling_pieces(8192, 16 * 1024 * 1024, 16),
+            1,
+            "one 16MiB piece per peer so 16 peers can leech"
+        );
+        assert_eq!(max_assembling_pieces(32, 16 * 1024 * 1024, 16), 1);
+        // 1 GiB / 16 MiB = 64 buffers. Large-piece cap 2 → ~32 peers.
+        assert_eq!(
+            max_assembling_pieces(8192, 16 * 1024 * 1024, 64),
+            2,
+            "1G staging + 16MiB pieces must not collapse onto a handful of peers"
+        );
+        // 4 MiB pieces, 64 buffers: fair 4 but large-piece cap 2.
+        assert_eq!(max_assembling_pieces(8192, 4 * 1024 * 1024, 64), 2);
+        // Small pieces: pipe needs 1, don't start extras.
+        assert_eq!(max_assembling_pieces(16, BLOCK_SIZE * 64, 256), 1);
+        assert_eq!(max_assembling_pieces(32, BLOCK_SIZE * 64, 4), 1);
+        assert_eq!(max_assembling_pieces(32, BLOCK_SIZE, 0), 0);
+    }
+
+    #[test]
+    fn take_requests_caps_pieces_per_peer() {
+        let plen = BLOCK_SIZE * 4; // 4 blocks/piece
+        let mut pool = test_staging(32, plen); // plenty of buffers
+                                               // pipeline 64 would want 16 pieces; cap is fair share of 32 = 2.
+        let mut next = 0u32;
+        let mut aborted = Vec::new();
+        let reqs = pool.take_requests(
+            64,
+            true,
+            |_| {
+                let i = next;
+                next += 1;
+                Some((i, plen))
+            },
+            |_| true,
+            |i| aborted.push(i),
+        );
+        assert_eq!(pool.slots.len(), 2, "must not hog the freelist");
+        assert_eq!(reqs.len(), 8); // 2 pieces × 4 blocks
+        assert!(aborted.is_empty());
+    }
+
+    #[test]
+    fn take_requests_releases_claim_when_start_fails() {
+        let plen = BLOCK_SIZE;
+        let mut pool = test_staging(1, plen);
+        let mut aborted = Vec::new();
+        let reqs = pool.take_requests(
+            8,
+            true,
+            |_| Some((7, plen + 1)), // longer than piece_length → try_start fails
+            |_| true,
+            |i| aborted.push(i),
+        );
+        assert!(reqs.is_empty());
+        assert_eq!(aborted, vec![7]);
+        assert!(pool.is_empty());
     }
 }

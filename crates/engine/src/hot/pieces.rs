@@ -354,12 +354,9 @@ impl HotTorrent {
             let pieces = self.pieces.read();
             let wanted = self.wanted_bf.read();
             let avail = self.availability.read();
-            // Snapshot in_flight only in endgame (prefer joining races).
-            let inflight = if endgame {
-                Some(self.in_flight.read().clone())
-            } else {
-                None
-            };
+            // Always snapshot: outside endgame, skip claimed so a large-torrent
+            // sample is not wasted on pieces other peers already own.
+            let inflight = self.in_flight.read().clone();
             let complete = pieces.complete;
             let have_n = pieces.have_count;
             let have_bf = if complete {
@@ -393,6 +390,11 @@ impl HotTorrent {
                 }
             }
             if !bitfield_get(&wanted, i) {
+                return false;
+            }
+            // Exclusive claims: do not spend candidate slots on work another
+            // peer already owns. Endgame wants those so idle peers join races.
+            if !endgame && inflight.contains(&i) {
                 return false;
             }
             bitfield_get(peer_bf, i)
@@ -456,8 +458,8 @@ impl HotTorrent {
             && missing_n > Self::PICK_CANDIDATE_CAP as u32;
         if endgame {
             candidates.sort_by(|a, b| {
-                let a_race = inflight.as_ref().map(|s| s.contains(&a.0)).unwrap_or(false);
-                let b_race = inflight.as_ref().map(|s| s.contains(&b.0)).unwrap_or(false);
+                let a_race = inflight.contains(&a.0);
+                let b_race = inflight.contains(&b.0);
                 // true (already racing) sorts before false
                 b_race.cmp(&a_race).then_with(|| a.1.cmp(&b.1)) // then rarer (lower avail)
             });
@@ -466,12 +468,40 @@ impl HotTorrent {
         }
 
         // Locks already dropped; try_claim may take in_flight / pieces.
-        for (i, _) in candidates {
-            if !try_claim(i) {
-                continue;
+        let try_from = |candidates: &[(u32, u16)], try_claim: &mut dyn FnMut(u32) -> bool| {
+            for &(i, _) in candidates {
+                if !try_claim(i) {
+                    continue;
+                }
+                return self.layout().piece_size(i).ok().map(|plen| (i, plen));
             }
-            let plen = self.layout().piece_size(i).ok()?;
-            return Some((i, plen));
+            None
+        };
+        if let Some(hit) = try_from(&candidates, &mut try_claim) {
+            return Some(hit);
+        }
+
+        // Sample hit only claimed / raced-away pieces and missing is still
+        // large: exact walk so this peer does not go idle while unclaimed
+        // work remains.
+        if !exact {
+            candidates.clear();
+            let start = if pc > 1 { rng.random_range(0..pc) } else { 0 };
+            for off in 0..pc {
+                if candidates.len() >= Self::PICK_CANDIDATE_CAP {
+                    break;
+                }
+                let i = (start + off) % pc;
+                if eligible(i) {
+                    candidates.push((i, rarity(i)));
+                }
+            }
+            if !random_first {
+                candidates.sort_by_key(|(_, r)| *r);
+            }
+            if let Some(hit) = try_from(&candidates, &mut try_claim) {
+                return Some(hit);
+            }
         }
         None
     }
