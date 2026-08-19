@@ -75,6 +75,22 @@ pub(super) fn draw_detail(f: &mut Frame, area: Rect, app: &mut App) {
             }),
             th,
         ));
+        if let (Some(used), Some(cap), Some(lim)) =
+            (l.staging_used, l.staging_cap, l.staging_limit_bytes)
+        {
+            let plen = d.piece_length as u64;
+            let used_bytes = used as u64 * plen;
+            lines.push(kv_line(
+                "staging",
+                Span::raw(format!(
+                    "{used}/{cap}  {} / {}  claims {}",
+                    human_bytes(used_bytes),
+                    human_bytes(lim),
+                    l.staging_claims
+                )),
+                th,
+            ));
+        }
     }
     if d.corrupted > 0 {
         lines.push(kv_line(

@@ -122,6 +122,33 @@ impl HotTorrent {
         self.staging_pool.read().clone()
     }
 
+    /// `(used, cap, limit_bytes)` for the shared leech pool. `None` if no pool.
+    pub fn staging_fill(&self, nonblocking: bool) -> Option<(usize, usize, u64)> {
+        let slot = if nonblocking {
+            self.staging_pool.try_read()?
+        } else {
+            self.staging_pool.read()
+        };
+        let pool = slot.as_ref()?.clone();
+        drop(slot);
+        let cap = pool.capacity();
+        let used = cap.saturating_sub(pool.available());
+        Some((used, cap, pool.limit_bytes()))
+    }
+
+    /// Exclusive piece claims currently held (assembling / hashing).
+    pub fn in_flight_count(&self, nonblocking: bool) -> usize {
+        let g = if nonblocking {
+            match self.in_flight.try_read() {
+                Some(g) => g,
+                None => return 0,
+            }
+        } else {
+            self.in_flight.read()
+        };
+        g.len()
+    }
+
     /// First missing **wanted** piece that `peer_has` reports, or None.
     pub fn next_interest_piece(&self, peer_has: &dyn Fn(u32) -> bool) -> Option<u32> {
         if self.is_download_complete() {

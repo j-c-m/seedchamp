@@ -134,6 +134,14 @@ pub struct TorrentLive {
     pub seeders: Option<u32>,
     /// Tracker-reported leechers from last successful announce.
     pub leechers: Option<u32>,
+    /// Shared leech piece-buffer slots in use (`None` if no pool).
+    pub staging_used: Option<u32>,
+    /// Shared leech piece-buffer cap.
+    pub staging_cap: Option<u32>,
+    /// Staging RAM budget (bytes).
+    pub staging_limit_bytes: Option<u64>,
+    /// Exclusive piece claims (`in_flight`).
+    pub staging_claims: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -307,6 +315,13 @@ impl super::SessionRuntime {
                     None => (None, None, false),
                 };
 
+            let (staging_used, staging_cap, staging_limit_bytes) = match t.staging_fill(nonblocking)
+            {
+                Some((u, c, lim)) => (Some(u as u32), Some(c as u32), Some(lim)),
+                None => (None, None, None),
+            };
+            let staging_claims = t.in_flight_count(nonblocking) as u32;
+
             let (seeders, leechers) = if nonblocking {
                 self.inner
                     .last_swarm
@@ -342,6 +357,10 @@ impl super::SessionRuntime {
                 announce_in_flight,
                 seeders,
                 leechers,
+                staging_used,
+                staging_cap,
+                staging_limit_bytes,
+                staging_claims,
             });
         }
         drop(rate_map);
