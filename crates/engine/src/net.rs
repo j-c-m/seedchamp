@@ -151,7 +151,7 @@ impl ReadCursor {
     }
 
     pub fn compact_if_needed(&mut self) {
-        const THRESH: usize = 32 * 1024;
+        const THRESH: usize = 16 * 1024;
         if self.pos == 0 {
             return;
         }

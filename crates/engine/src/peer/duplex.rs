@@ -234,8 +234,7 @@ async fn reader_loop(
         },
     );
     let mut read_buf = net::ReadCursor::from_vec(initial_plain);
-    // Bulk read quanta (capacity stays 16 KiB — never resized down).
-    let mut scratch = Vec::with_capacity(16 * 1024);
+    let mut scratch = Vec::with_capacity(WIRE_READ_CHUNK);
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
     let mut am_interested = want_download;
@@ -430,7 +429,7 @@ async fn reader_loop(
         match read_some_until(
             &mut rd,
             &mut scratch,
-            16 * 1024,
+            WIRE_READ_CHUNK,
             stall_deadline,
             stop_rx.as_ref(),
         )
@@ -599,6 +598,9 @@ async fn reader_inter_socket(
         reloop: false,
     }
 }
+
+/// Socket `read_some` max. Covers several 16 KiB PIECE frames per recv.
+const WIRE_READ_CHUNK: usize = 64 * 1024;
 
 /// Compio `read_some` with optional stall deadline and optional stop-wake.
 ///
