@@ -16,11 +16,14 @@ use crate::crypto::Rc4;
 use crate::error::{Error, Result};
 use crate::wire::MAX_MESSAGE_LENGTH;
 
-/// Socket `read_some` max. Covers several 16 KiB PIECE frames per recv.
-pub const WIRE_READ_CHUNK: usize = 64 * 1024;
+/// Socket `read_some` max. Matches the experimental pipeline lowat cap.
+pub const WIRE_READ_CHUNK: usize = 256 * 1024;
 
 /// Do not raise `SO_RCVLOWAT` for a smaller remainder (setsockopt not worth it).
 const RCVLOWAT_MIN: usize = 4 * 1024;
+
+/// Experimental cap: `min(N × 16KiB, SO_RCVBUF/2, this)`.
+const PIPELINE_LOWAT_CAP: usize = 256 * 1024;
 
 /// Apply `SO_SNDBUF` / `SO_RCVBUF` when non-zero.
 ///
@@ -191,14 +194,48 @@ impl ReadCursor {
         Some((4 + msg_len).saturating_sub(u.len()))
     }
 
-    /// `SO_RCVLOWAT` to arm before a park: remainder of a known large frame,
-    /// capped at [`WIRE_READ_CHUNK`]. `None` = leave the kernel default (1).
+    /// Mid-frame remainder only (no pipeline speculation).
     pub fn recv_lowat(&self) -> Option<usize> {
         let need = self.frame_remaining()?;
         if need < RCVLOWAT_MIN {
             return None;
         }
         Some(need.min(WIRE_READ_CHUNK))
+    }
+
+    /// Park lowat: mid-frame remainder, or experimental
+    /// `min(outstanding × block, rcvbuf/2, 256KiB)` when `speculative`.
+    pub fn recv_lowat_park(
+        &self,
+        outstanding: usize,
+        block: usize,
+        rcvbuf: usize,
+        speculative: bool,
+    ) -> Option<usize> {
+        let frame = self.recv_lowat();
+        let spec = if speculative {
+            pipeline_lowat(outstanding, block, rcvbuf)
+        } else {
+            None
+        };
+        match (frame, spec) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+}
+
+/// `min(N × block, rcvbuf/2, 256KiB)` (`block` is the request size, ≤ 16KiB).
+pub fn pipeline_lowat(outstanding: usize, block: usize, rcvbuf: usize) -> Option<usize> {
+    if outstanding == 0 || rcvbuf < 2 || block == 0 {
+        return None;
+    }
+    let want = outstanding.saturating_mul(block);
+    let n = want.min(rcvbuf / 2).min(PIPELINE_LOWAT_CAP);
+    if n < RCVLOWAT_MIN {
+        None
+    } else {
+        Some(n)
     }
 }
 
@@ -210,12 +247,19 @@ pub struct RecvLowatGuard {
 }
 
 impl RecvLowatGuard {
-    /// Arm only when [`ReadCursor::recv_lowat`] is `Some`. Failures are ignored.
-    pub fn arm(stream: &impl std::os::fd::AsFd, cursor: &ReadCursor) -> Self {
+    /// Arm from [`ReadCursor::recv_lowat_park`]. Failures are ignored.
+    pub fn arm(
+        stream: &impl std::os::fd::AsFd,
+        cursor: &ReadCursor,
+        outstanding: usize,
+        block: usize,
+        rcvbuf: usize,
+        speculative: bool,
+    ) -> Self {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
-            if let Some(n) = cursor.recv_lowat() {
+            if let Some(n) = cursor.recv_lowat_park(outstanding, block, rcvbuf, speculative) {
                 let fd = stream.as_fd().as_raw_fd();
                 if set_recv_lowat_fd(fd, n).is_ok() {
                     return Self { fd: Some(fd) };
@@ -225,7 +269,7 @@ impl RecvLowatGuard {
         }
         #[cfg(not(unix))]
         {
-            let _ = (stream, cursor);
+            let _ = (stream, cursor, outstanding, block, rcvbuf, speculative);
             Self {}
         }
     }
@@ -244,6 +288,40 @@ impl Drop for RecvLowatGuard {
 fn set_recv_lowat(stream: &impl std::os::fd::AsFd, n: usize) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     set_recv_lowat_fd(stream.as_fd().as_raw_fd(), n)
+}
+
+/// Kernel `SO_RCVBUF` (Linux often reports 2× the requested size).
+#[allow(unsafe_code)]
+pub fn socket_recv_buffer(stream: &impl std::os::fd::AsFd) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = stream.as_fd().as_raw_fd();
+        let mut val: libc::c_int = 0;
+        let mut len = std::mem::size_of_val(&val) as libc::socklen_t;
+        #[allow(unsafe_code)]
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                (&mut val as *mut libc::c_int).cast(),
+                &mut len,
+            )
+        };
+        if rc == 0 && val > 0 {
+            Ok(val as usize)
+        } else if rc == 0 {
+            Ok(0)
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = stream;
+        Ok(0)
+    }
 }
 
 #[cfg(unix)]
@@ -420,6 +498,34 @@ mod tests {
     fn recv_lowat_skips_small_control() {
         // HAVE: len=5
         assert_eq!(cursor(&len_prefix(5, 0)).recv_lowat(), None);
+    }
+
+    #[test]
+    fn pipeline_lowat_formula() {
+        const B: usize = crate::staging::BLOCK_SIZE as usize;
+        assert_eq!(pipeline_lowat(0, B, 128 * 1024), None);
+        assert_eq!(pipeline_lowat(4, B, 0), None);
+        assert_eq!(pipeline_lowat(4, B, 128 * 1024), Some(4 * B));
+        assert_eq!(pipeline_lowat(4, B, 64 * 1024), Some(32 * 1024));
+        assert_eq!(
+            pipeline_lowat(32, B, 2 * 1024 * 1024),
+            Some(PIPELINE_LOWAT_CAP)
+        );
+        assert_eq!(pipeline_lowat(1, B, 128 * 1024), Some(B));
+        assert_eq!(pipeline_lowat(3, 32, 128 * 1024), None);
+    }
+
+    #[test]
+    fn park_prefers_larger_of_frame_and_pipeline() {
+        let c = cursor(&len_prefix(16393, 0));
+        const B: usize = crate::staging::BLOCK_SIZE as usize;
+        assert_eq!(c.recv_lowat_park(4, B, 128 * 1024, true), Some(4 * B));
+        assert_eq!(c.recv_lowat_park(4, B, 128 * 1024, false), Some(16393));
+        assert_eq!(
+            cursor(&[]).recv_lowat_park(4, B, 128 * 1024, true),
+            Some(64 * 1024)
+        );
+        assert_eq!(cursor(&[]).recv_lowat_park(4, B, 128 * 1024, false), None);
     }
 
     /// Close with less than `SO_RCVLOWAT` queued must still complete the read

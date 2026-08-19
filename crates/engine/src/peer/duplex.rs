@@ -12,8 +12,10 @@
 //!
 //! **Wake model (K19):** inter-socket progress (hash, stall, Requests, rate-limit
 //! sleep) never holds a Compio socket future across `select`. Socket park is a
-//! single `read_some`. Mid-frame (known length, remainder ≥ 4 KiB) raises
-//! `SO_RCVLOWAT` for that park only. All BT frames, including PIECE, land in
+//! single `read_some`. Mid-frame remainder or, experimentally,
+//! `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)` when Requests are in
+//! flight. Stall timeout skips speculation once so queued bytes drain.
+//! All BT frames, including PIECE, land in
 //! `read_buf` and go through [`parse_available_messages`]. Writer idle select
 //! is only cmd/HAVE/keepalive (no write future in select).
 
@@ -237,6 +239,8 @@ async fn reader_loop(
     );
     let mut read_buf = net::ReadCursor::from_vec(initial_plain);
     let mut scratch = Vec::with_capacity(net::WIRE_READ_CHUNK);
+    let rcvbuf = net::socket_recv_buffer(&rd).unwrap_or(0);
+    let mut skip_speculative = false;
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
     let mut last_useful_at = Instant::now();
@@ -446,7 +450,18 @@ async fn reader_loop(
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
-        let _lowat = net::RecvLowatGuard::arm(&rd, &read_buf);
+        let speculative = !skip_speculative;
+        skip_speculative = false;
+        let block =
+            (torrent.layout().piece_length as usize).min(crate::staging::BLOCK_SIZE as usize);
+        let _lowat = net::RecvLowatGuard::arm(
+            &rd,
+            &read_buf,
+            dl.outstanding() as usize,
+            block,
+            rcvbuf,
+            speculative,
+        );
         match read_some_until(
             &mut rd,
             &mut scratch,
@@ -472,6 +487,7 @@ async fn reader_loop(
                     dl.staging.requeue_timed_out();
                 }
                 last_piece_at = Instant::now();
+                skip_speculative = true;
                 dl.refresh_outbound(&mut out, &cfg, downloading, true);
                 continue;
             }
