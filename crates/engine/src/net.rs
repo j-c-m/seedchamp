@@ -251,53 +251,6 @@ pub async fn read_some(stream: &mut TcpStream, scratch: &mut Vec<u8>, max: usize
     Ok(n)
 }
 
-/// Compio `read_exact` of `len` bytes into `buf[start..start+len]`.
-///
-/// Freelist piece buffers are fully initialized. Compio only fills the uninit
-/// tail, so we temporarily `set_len(start)` (prior blocks stay init), exact-read
-/// the owned slice, then restore the full piece length. On I/O error `buf` is
-/// still returned for staging put-back.
-#[allow(unsafe_code)] // Vec::set_len on freelist piece capacity only
-pub async fn read_exact_at(
-    stream: &mut TcpStream,
-    mut buf: Vec<u8>,
-    start: usize,
-    len: usize,
-) -> std::result::Result<Vec<u8>, (Error, Vec<u8>)> {
-    if len == 0 {
-        return Ok(buf);
-    }
-    let end = match start.checked_add(len) {
-        Some(e) if e <= buf.len() && e <= buf.capacity() => e,
-        _ => {
-            return Err((
-                Error::Msg(format!(
-                    "read_exact_at range {start}+{len} past buf len {} cap {}",
-                    buf.len(),
-                    buf.capacity()
-                )),
-                buf,
-            ));
-        }
-    };
-    let want_len = buf.len();
-    // SAFETY: start <= want_len <= capacity; [0..start) remains initialized.
-    unsafe {
-        buf.set_len(start);
-    }
-    let slice = buf.slice(start..end);
-    let BufResult(r, slice) = stream.read_exact(slice).await;
-    let mut buf = slice.into_inner();
-    // SAFETY: allocation still holds the freelist piece buffer of size want_len.
-    unsafe {
-        buf.set_len(want_len);
-    }
-    match r {
-        Ok(()) => Ok(buf),
-        Err(e) => Err((Error::Msg(format!("read: {e}")), buf)),
-    }
-}
-
 pub async fn read_some_timeout(
     stream: &mut TcpStream,
     scratch: &mut Vec<u8>,

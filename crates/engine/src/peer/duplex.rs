@@ -12,9 +12,9 @@
 //!
 //! **Wake model (K19):** inter-socket progress (hash, stall, Requests, rate-limit
 //! sleep) never holds a Compio socket future across `select`. Socket park is a
-//! single await (`read_some` / `drain_piece_path`); body `read_exact_at` is not
-//! cancelled by timers. Writer idle select is only cmd/HAVE/keepalive (no write
-//! future in select).
+//! single `read_some`. All BT frames, including PIECE, land in `read_buf` and
+//! go through [`parse_available_messages`]. Writer idle select is only
+//! cmd/HAVE/keepalive (no write future in select).
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,9 +37,7 @@ use crate::runtime::{
 };
 use crate::staging::StagingPool;
 use crate::upload::UploadBlock;
-use crate::wire::{
-    encode_message, encode_possession_fast, parse_piece_header, FastSession, Message, SIZEOF_PIECE,
-};
+use crate::wire::{encode_message, encode_possession_fast, FastSession, Message};
 
 use super::super::net;
 use super::config::PeerConfig;
@@ -136,8 +134,7 @@ impl PeerOut for OutCmd {
 
 /// Run full-duplex after the post-handshake hello has been written on `wr`.
 ///
-/// Reader owns the socket half: Compio reads are never cancelled by hash/timer.
-/// PIECE bodies use take-buffer + `read_exact_at` into staging (no per-body copy).
+/// Reader owns the socket half: hash/timer never cancel a Compio read.
 pub(crate) async fn run_duplex(
     rd: TcpStream,
     wr: TcpStream,
@@ -237,10 +234,8 @@ async fn reader_loop(
         },
     );
     let mut read_buf = net::ReadCursor::from_vec(initial_plain);
-    // Bulk / discard quanta (capacity stays 16 KiB — never resized down).
+    // Bulk read quanta (capacity stays 16 KiB — never resized down).
     let mut scratch = Vec::with_capacity(16 * 1024);
-    // Fixed 13 B PIECE-header probe (separate so we never fight bulk capacity).
-    let mut hdr_scratch = Vec::with_capacity(SIZEOF_PIECE);
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
     let mut am_interested = want_download;
@@ -419,85 +414,44 @@ async fn reader_loop(
             }
         }
 
-        // Sole Compio socket await path. Stall timeout only on header/bulk
-        // `read_some` (never mid-body `read_exact_at`).
+        // Sole Compio socket await. Incomplete frames (including mid-PIECE)
+        // stay in read_buf; stall Cancels and re-Requests without dropping.
         let mut socket_need_fill = need_fill;
+        let stall = if dl.endgame {
+            REQUEST_STALL_ENDGAME
+        } else {
+            REQUEST_STALL
+        };
         let stall_deadline = if downloading && dl.can_request() && dl.outstanding() > 0 {
-            let stall = if dl.endgame {
-                REQUEST_STALL_ENDGAME
-            } else {
-                REQUEST_STALL
-            };
             Some(last_piece_at + stall)
         } else {
             None
         };
-        if dl.expect_piece_header(downloading) && read_buf.unparsed().is_empty() {
-            match drain_piece_path(
-                &mut rd,
-                &mut dl,
-                &mut hdr_scratch,
-                &mut scratch,
-                &mut read_buf,
-                decrypt.as_mut(),
-                downloading,
-                cfg.wire_down.as_ref().map(|a| a.as_ref()),
-                &hash_tx,
-                cfg.hash.as_deref(),
-                &mut last_piece_at,
-                &mut socket_need_fill,
-                stall_deadline,
-                stop_rx.as_ref(),
-            )
-            .await?
-            {
-                SocketDrain::Closed => {
-                    out.reader_done();
-                    break 'read;
+        match read_some_until(
+            &mut rd,
+            &mut scratch,
+            16 * 1024,
+            stall_deadline,
+            stop_rx.as_ref(),
+        )
+        .await?
+        {
+            None => {
+                let outstanding = dl.outstanding();
+                if outstanding > 0 {
+                    let _ = dl.cancel_outstanding(&mut out);
+                    dl.staging.requeue_timed_out();
                 }
-                SocketDrain::Stopped => {}
-                SocketDrain::Stalled => {
-                    let outstanding = dl.outstanding();
-                    if outstanding > 0 {
-                        let _ = dl.cancel_outstanding(&mut out);
-                        dl.staging.requeue_timed_out();
-                    } else if dl.hashing.is_empty() {
-                        dl.staging.requeue_timed_out();
-                    }
-                    last_piece_at = Instant::now();
-                    dl.refresh_outbound(&mut out, &cfg, downloading, true);
-                    continue;
-                }
+                last_piece_at = Instant::now();
+                dl.refresh_outbound(&mut out, &cfg, downloading, true);
+                continue;
             }
-        } else {
-            match read_some_until(
-                &mut rd,
-                &mut scratch,
-                16 * 1024,
-                stall_deadline,
-                stop_rx.as_ref(),
-            )
-            .await?
-            {
-                None => {
-                    // Stall while waiting for any frame with outstanding Requests.
-                    let outstanding = dl.outstanding();
-                    if outstanding > 0 {
-                        let _ = dl.cancel_outstanding(&mut out);
-                        dl.staging.requeue_timed_out();
-                    }
-                    last_piece_at = Instant::now();
-                    dl.refresh_outbound(&mut out, &cfg, downloading, true);
-                    continue;
-                }
-                Some(0) => {
-                    // EOF or session stop-wake.
-                    out.reader_done();
-                    break 'read;
-                }
-                Some(n) => {
-                    read_buf.append(&scratch[..n], decrypt.as_mut());
-                }
+            Some(0) => {
+                out.reader_done();
+                break 'read;
+            }
+            Some(n) => {
+                read_buf.append(&scratch[..n], decrypt.as_mut());
             }
         }
 
@@ -646,17 +600,10 @@ async fn reader_inter_socket(
     }
 }
 
-enum SocketDrain {
-    Closed,
-    Stopped,
-    /// Header / bulk wait hit request stall — cancel outstanding outside.
-    Stalled,
-}
-
 /// Compio `read_some` with optional stall deadline and optional stop-wake.
 ///
-/// `None` = stall timeout. `Some(0)` = EOF **or** session stop. Body
-/// `read_exact_at` is never wrapped here. Rate-limit sleeps do **not** use this.
+/// `None` = stall timeout. `Some(0)` = EOF **or** session stop.
+/// Rate-limit sleeps do **not** use this.
 async fn read_some_until(
     stream: &mut TcpStream,
     scratch: &mut Vec<u8>,
@@ -690,132 +637,6 @@ async fn read_some_until(
     } else {
         Ok(Some(net::read_some(stream, scratch, max).await?))
     }
-}
-
-/// 13 B header → take staging buf → Compio `read_exact_at` body (or discard).
-///
-/// `hdr` is a dedicated capacity-13 buffer; `scratch` is the bulk/discard 16 KiB
-/// buffer (not resized for header probes). Stall timeout applies only to the
-/// header `read_some`; body fill is never cancelled.
-async fn drain_piece_path(
-    stream: &mut TcpStream,
-    dl: &mut PeerDownload,
-    hdr: &mut Vec<u8>,
-    scratch: &mut Vec<u8>,
-    read_buf: &mut net::ReadCursor,
-    mut decrypt: Option<&mut Rc4>,
-    downloading: bool,
-    wire_down: Option<&std::sync::atomic::AtomicU64>,
-    hash_tx: &FlumeSender<HashOutcome>,
-    hash_pool: Option<&crate::runtime::HashPool>,
-    last_piece_at: &mut Instant,
-    need_fill: &mut bool,
-    stall_deadline: Option<Instant>,
-    stop_rx: Option<&FlumeReceiver<()>>,
-) -> Result<SocketDrain> {
-    loop {
-        if !dl.expect_piece_header(downloading) || !read_buf.unparsed().is_empty() {
-            return Ok(SocketDrain::Stopped);
-        }
-
-        let n = match read_some_until(stream, hdr, SIZEOF_PIECE, stall_deadline, stop_rx).await? {
-            None => return Ok(SocketDrain::Stalled),
-            Some(0) => return Ok(SocketDrain::Closed), // EOF or session stop-wake
-            Some(n) => n,
-        };
-        if let Some(c) = decrypt.as_deref_mut() {
-            c.crypt_inplace(&mut hdr[..n]);
-        }
-        if n < SIZEOF_PIECE {
-            read_buf.append(&hdr[..n], None);
-            return Ok(SocketDrain::Stopped);
-        }
-        let Some(h) = parse_piece_header(&hdr[..SIZEOF_PIECE])? else {
-            read_buf.append(&hdr[..n], None);
-            return Ok(SocketDrain::Stopped);
-        };
-
-        if h.block_len == 0 {
-            continue;
-        }
-
-        if !dl.want_direct_piece(&h) {
-            if discard_body(stream, scratch, decrypt.as_deref_mut(), h.block_len).await? {
-                return Ok(SocketDrain::Closed);
-            }
-            *last_piece_at = Instant::now();
-            continue;
-        }
-
-        let Some(mut taken) = dl.staging.take_assembling(h.index) else {
-            if discard_body(stream, scratch, decrypt.as_deref_mut(), h.block_len).await? {
-                return Ok(SocketDrain::Closed);
-            }
-            *last_piece_at = Instant::now();
-            continue;
-        };
-
-        if !taken.range_ok(h.begin, h.block_len) {
-            dl.staging.put_assembling(taken);
-            if discard_body(stream, scratch, decrypt.as_deref_mut(), h.block_len).await? {
-                return Ok(SocketDrain::Closed);
-            }
-            *last_piece_at = Instant::now();
-            continue;
-        }
-
-        let start = h.begin as usize;
-        let len = h.block_len as usize;
-        let buf = std::mem::take(&mut taken.buf);
-        // Body: never wrap in stall timeout (cancel would desync staging buffer).
-        let buf = match net::read_exact_at(stream, buf, start, len).await {
-            Ok(buf) => buf,
-            Err((e, buf)) => {
-                taken.buf = buf;
-                dl.staging.put_assembling(taken);
-                return Err(e);
-            }
-        };
-        taken.buf = buf;
-        if let Some(c) = decrypt.as_deref_mut() {
-            c.crypt_inplace(&mut taken.buf[start..start + len]);
-        }
-        if let Some(w) = wire_down {
-            w.fetch_add(len as u64, Ordering::Relaxed);
-        }
-        *last_piece_at = Instant::now();
-        let index = taken.index();
-        dl.staging.put_assembling(taken);
-
-        let Some(hash_pool) = hash_pool else {
-            return Err(crate::error::Error::Msg(
-                "hash thread not configured".into(),
-            ));
-        };
-        if dl.finish_direct_piece_body(hash_tx, hash_pool, index, h.begin, h.block_len)? {
-            *need_fill = true;
-        }
-    }
-}
-
-async fn discard_body(
-    stream: &mut TcpStream,
-    scratch: &mut Vec<u8>,
-    mut decrypt: Option<&mut Rc4>,
-    mut left: u32,
-) -> Result<bool> {
-    while left > 0 {
-        let want = (left as usize).min(16 * 1024);
-        let n = net::read_some(stream, scratch, want).await?;
-        if n == 0 {
-            return Ok(true);
-        }
-        if let Some(c) = decrypt.as_deref_mut() {
-            c.crypt_inplace(&mut scratch[..n]);
-        }
-        left -= n as u32;
-    }
-    Ok(false)
 }
 
 async fn writer_loop(

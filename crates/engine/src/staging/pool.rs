@@ -141,31 +141,6 @@ impl ActivePiece {
     }
 }
 
-/// Assembling piece temporarily removed from the pool for a Compio-owned fill.
-pub struct TakenPieceBuf {
-    piece: ActivePiece,
-    pub buf: Vec<u8>,
-}
-
-impl TakenPieceBuf {
-    pub fn index(&self) -> u32 {
-        self.piece.index
-    }
-
-    pub fn piece_length(&self) -> u32 {
-        self.piece.length
-    }
-
-    /// True if `[begin, begin+len)` fits the piece and buffer.
-    pub fn range_ok(&self, begin: u32, len: u32) -> bool {
-        if len == 0 {
-            return false;
-        }
-        let end = begin as u64 + len as u64;
-        end <= self.piece.length as u64 && (begin as usize + len as usize) <= self.buf.len()
-    }
-}
-
 pub fn num_blocks(piece_len: u32) -> usize {
     if piece_len == 0 {
         return 0;
@@ -283,43 +258,6 @@ impl StagingPool {
             return Ok(None);
         };
         Ok(Some(piece.ingest(buf, begin, data)?))
-    }
-
-    /// Take assembling piece buffer for Compio IoBuf fill (owned for the op).
-    ///
-    /// Caller must [`Self::put_assembling`] (or drop via freelist on fatal error).
-    pub fn take_assembling(&mut self, index: u32) -> Option<TakenPieceBuf> {
-        let pos = self
-            .slots
-            .iter()
-            .position(|s| matches!(s, Slot::Assembling { piece, .. } if piece.index == index))?;
-        let Slot::Assembling { piece, buf } = self.slots.swap_remove(pos) else {
-            return None;
-        };
-        Some(TakenPieceBuf { piece, buf })
-    }
-
-    /// Restore a buffer taken with [`Self::take_assembling`].
-    pub fn put_assembling(&mut self, taken: TakenPieceBuf) {
-        self.slots.push(Slot::Assembling {
-            piece: taken.piece,
-            buf: taken.buf,
-        });
-    }
-
-    /// After body written in place (Compio fill or copy), mark have-bits.
-    /// `Ok(None)` if not assembling; `Ok(Some(piece_complete))` otherwise.
-    pub fn finish_block_range(
-        &mut self,
-        index: u32,
-        begin: u32,
-        length: u32,
-    ) -> Result<Option<bool>> {
-        let Some((piece, buf)) = self.find_assembling_mut(index) else {
-            return Ok(None);
-        };
-        piece.mark_range_have(begin, length, buf.len() as u32)?;
-        Ok(Some(piece.is_complete()))
     }
 
     /// Piece complete: move buffer to caller and mark hashing-in-flight.
@@ -776,89 +714,6 @@ mod tests {
         pool.reclaim(0, buf);
         assert_eq!(pool.free_slots(), 2);
         assert!(pool.try_start(1, plen));
-    }
-
-    /// Take/put Compio path + finish_block_range must match ingest.
-    #[test]
-    fn take_put_finish_match_ingest() {
-        let plen = BLOCK_SIZE * 2;
-        let mut pool = test_staging(2, plen);
-        let block0: Vec<u8> = (0..BLOCK_SIZE as usize).map(|i| (i % 251) as u8).collect();
-        let block1: Vec<u8> = (0..BLOCK_SIZE as usize)
-            .map(|i| ((i * 3) % 251) as u8)
-            .collect();
-
-        assert!(pool.take_assembling(0).is_none());
-        assert!(pool.finish_block_range(0, 0, BLOCK_SIZE).unwrap().is_none());
-
-        assert!(pool.try_start(0, plen));
-        {
-            let mut t = pool.take_assembling(0).expect("taken");
-            assert!(t.range_ok(0, BLOCK_SIZE));
-            assert!(!t.range_ok(0, 0));
-            assert!(!t.range_ok(0, plen + 1));
-            t.buf[..BLOCK_SIZE as usize].copy_from_slice(&block0);
-            pool.put_assembling(t);
-        }
-        assert_eq!(
-            pool.finish_block_range(0, 0, BLOCK_SIZE).unwrap(),
-            Some(false)
-        );
-
-        {
-            let mut t = pool.take_assembling(0).expect("taken");
-            t.buf[BLOCK_SIZE as usize..].copy_from_slice(&block1);
-            pool.put_assembling(t);
-        }
-        assert_eq!(
-            pool.finish_block_range(0, BLOCK_SIZE, BLOCK_SIZE).unwrap(),
-            Some(true)
-        );
-
-        let (got_len, buf) = pool.take_for_hash(0).unwrap();
-        assert_eq!(got_len, plen);
-        assert_eq!(&buf[..BLOCK_SIZE as usize], block0.as_slice());
-        assert_eq!(&buf[BLOCK_SIZE as usize..], block1.as_slice());
-        pool.reclaim(0, buf);
-    }
-
-    #[test]
-    fn take_put_finish_equivalent_to_ingest_bytes() {
-        let plen = BLOCK_SIZE * 2;
-        let b0 = vec![0x11u8; BLOCK_SIZE as usize];
-        let b1 = vec![0x22u8; BLOCK_SIZE as usize];
-
-        let mut direct = test_staging(2, plen);
-        assert!(direct.try_start(0, plen));
-        {
-            let mut t = direct.take_assembling(0).unwrap();
-            t.buf[..BLOCK_SIZE as usize].copy_from_slice(&b0);
-            direct.put_assembling(t);
-        }
-        direct.finish_block_range(0, 0, BLOCK_SIZE).unwrap();
-        {
-            let mut t = direct.take_assembling(0).unwrap();
-            t.buf[BLOCK_SIZE as usize..].copy_from_slice(&b1);
-            direct.put_assembling(t);
-        }
-        assert_eq!(
-            direct
-                .finish_block_range(0, BLOCK_SIZE, BLOCK_SIZE)
-                .unwrap(),
-            Some(true)
-        );
-        let (_, direct_buf) = direct.take_for_hash(0).unwrap();
-
-        let mut via_ingest = test_staging(2, plen);
-        assert!(via_ingest.try_start(0, plen));
-        via_ingest.ingest_if_staged(0, 0, &b0).unwrap();
-        assert_eq!(
-            via_ingest.ingest_if_staged(0, BLOCK_SIZE, &b1).unwrap(),
-            Some(true)
-        );
-        let (_, ingest_buf) = via_ingest.take_for_hash(0).unwrap();
-
-        assert_eq!(direct_buf, ingest_buf);
     }
 
     #[test]

@@ -194,7 +194,7 @@ peers → (decrypt if RC4) → block assembler (per piece) → staging RAM
       → HAVE to peers
 ```
 
-**Pipeline knobs:** per-peer request depth is **BDP-sized** from an EMA of that peer’s wire download rate (`desired ≈ 5s × rate / 16 KiB`). Config: `swarm.pipeline` = initial depth; `swarm.pipeline_max` = cap.
+**Pipeline knobs:** per-peer request depth is **BDP-sized** from an EMA of that peer’s wire download rate (`desired ≈ 5s × rate / 16 KiB`). Config: `swarm.pipeline` = initial depth; `swarm.pipeline_max` = cap. PIECE uses the same `read_buf` parse path as other BT messages. Request stall (20 s, 4 s in endgame) Cancels and re-Requests; a partial frame stays in the buffer. Only ingested blocks refresh the stall clock.
 
 **Staging RAM:** shared **per-torrent** freelist of piece-sized buffers, budgeted by **`swarm.staging_mem_limit`** (default **256 MiB**; TOML `"256M"` / `"1G"` or integer bytes). Cap `N = limit / piece_length`; buffers are **lazy-allocated** on first acquire and recycled on release (no free/realloc thrash). Peers acquire/release under exclusive piece claim. A peer may assemble at most enough pieces to fill its request pipeline, at most `⌈N/16⌉` of the freelist, and at most **2** pieces when `piece_length ≥ 4 MiB` (a 1 GiB pool / 16 MiB pieces stays ~32 peers, not a handful). `try_start` failure releases the exclusive claim (do not lock a piece with no buffer). **Hash/disk does not keep the staging slot** — `take_for_hash` detaches the buffer so writes (disk depth 32 × 16 MiB) cannot empty the leech freelist. Pool is **dropped when wanted download is complete** (all wanted pieces have, or remaining files priority-off). Seeding keeps the hot torrent without staging RAM.
 

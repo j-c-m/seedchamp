@@ -56,19 +56,18 @@ pub(crate) fn parse_available_messages(
                 begin,
                 block,
             } => {
-                // Empty body (message_len == 9): pure ignore, same as
-                // on_piece_header skip_empty. No stall / wire_down / ingest.
+                // Empty body (message_len == 9): ignore.
                 if block.is_empty() {
                     // fall through
                 } else if downloading {
-                    // Policy C: any non-empty PIECE while leeching refreshes
-                    // stall; wire_down only for blocks ingested into staging.
-                    *last_piece_at = Instant::now();
+                    // Stall clock only on ingested blocks. Discarded PIECE
+                    // (already have / not staged) must not postpone Cancel.
                     if !torrent.has_piece(index) {
                         let Some(ref hash_pool) = cfg.hash else {
                             return Err(Error::Msg("hash thread not configured".into()));
                         };
                         if dl.handle_piece(hash_tx, hash_pool, index, begin, block)? {
+                            *last_piece_at = Instant::now();
                             if let Some(ref c) = cfg.wire_down {
                                 c.fetch_add(block.len() as u64, Ordering::Relaxed);
                             }

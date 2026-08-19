@@ -7,7 +7,6 @@ use flume::Sender as FlumeSender;
 
 use crate::error::Result;
 use crate::staging::StagingPool;
-use crate::wire::PieceHeader;
 
 use super::config::PeerConfig;
 use super::ctrl_scratch::CtrlScratch;
@@ -125,68 +124,6 @@ impl PeerDownload {
     #[inline]
     pub(crate) fn outstanding(&self) -> u64 {
         self.staging.total_outstanding() as u64
-    }
-
-    /// Expect a 13-byte PIECE header: leeching with outstanding Requests.
-    #[inline]
-    pub(crate) fn expect_piece_header(&self, downloading: bool) -> bool {
-        downloading && self.outstanding() > 0
-    }
-
-    /// Whether this PIECE header should fill staging (else discard body).
-    pub(crate) fn want_direct_piece(&self, h: &PieceHeader) -> bool {
-        h.block_len > 0
-            && !self.torrent.has_piece(h.index)
-            && !self.hashing.contains(&h.index)
-            && self.staging.contains(h.index)
-    }
-
-    /// After Compio body fill into staging; returns whether pipeline should refill.
-    pub(crate) fn finish_direct_piece_body(
-        &mut self,
-        hash_tx: &FlumeSender<HashOutcome>,
-        hash_pool: &crate::runtime::HashPool,
-        index: u32,
-        begin: u32,
-        total: u32,
-    ) -> Result<bool> {
-        // Another peer may have completed this piece while we were mid-body.
-        if self.torrent.has_piece(index) || self.hashing.contains(&index) {
-            return Ok(true);
-        }
-        let Some(complete) = self.staging.finish_block_range(index, begin, total)? else {
-            return Ok(false);
-        };
-        if !complete {
-            return Ok(true);
-        }
-        let Some((plen, data)) = self.staging.take_for_hash(index) else {
-            return Ok(true);
-        };
-        let expected = match self.torrent.piece_hash(index) {
-            Ok(h) => h,
-            Err(e) => {
-                self.staging.reclaim(index, data);
-                return Err(e);
-            }
-        };
-        let layout = self.torrent.layout();
-        self.hashing.insert(index);
-        match hash_pool.submit(HashJob {
-            index,
-            plen,
-            data,
-            expected,
-            layout,
-            reply: hash_tx.clone(),
-        }) {
-            Ok(()) => Ok(true),
-            Err((e, job)) => {
-                self.hashing.remove(&index);
-                self.staging.reclaim(index, job.data);
-                Err(e)
-            }
-        }
     }
 
     /// Cancel all currently outstanding block requests into the outbound queue.
