@@ -14,6 +14,13 @@ use socket2::SockRef;
 
 use crate::crypto::Rc4;
 use crate::error::{Error, Result};
+use crate::wire::MAX_MESSAGE_LENGTH;
+
+/// Socket `read_some` max. Covers several 16 KiB PIECE frames per recv.
+pub const WIRE_READ_CHUNK: usize = 64 * 1024;
+
+/// Do not raise `SO_RCVLOWAT` for a smaller remainder (setsockopt not worth it).
+const RCVLOWAT_MIN: usize = 4 * 1024;
 
 /// Apply `SO_SNDBUF` / `SO_RCVBUF` when non-zero.
 ///
@@ -167,12 +174,96 @@ impl ReadCursor {
     }
 
     pub fn has_complete_frame(&self) -> bool {
+        matches!(self.frame_remaining(), Some(0))
+    }
+
+    /// Bytes still needed to finish the current BT frame, if the 4-byte length
+    /// is present and not over [`MAX_MESSAGE_LENGTH`]. `Some(0)` = complete.
+    pub fn frame_remaining(&self) -> Option<usize> {
         let u = self.unparsed();
         if u.len() < 4 {
-            return false;
+            return None;
         }
         let msg_len = u32::from_be_bytes([u[0], u[1], u[2], u[3]]) as usize;
-        u.len() >= 4 + msg_len
+        if msg_len > MAX_MESSAGE_LENGTH {
+            return None;
+        }
+        Some((4 + msg_len).saturating_sub(u.len()))
+    }
+
+    /// `SO_RCVLOWAT` to arm before a park: remainder of a known large frame,
+    /// capped at [`WIRE_READ_CHUNK`]. `None` = leave the kernel default (1).
+    pub fn recv_lowat(&self) -> Option<usize> {
+        let need = self.frame_remaining()?;
+        if need < RCVLOWAT_MIN {
+            return None;
+        }
+        Some(need.min(WIRE_READ_CHUNK))
+    }
+}
+
+/// Raises `SO_RCVLOWAT` for a mid-frame park; restores 1 on drop.
+/// Holds a raw fd so the stream can be mutably borrowed for the read.
+pub struct RecvLowatGuard {
+    #[cfg(unix)]
+    fd: Option<std::os::fd::RawFd>,
+}
+
+impl RecvLowatGuard {
+    /// Arm only when [`ReadCursor::recv_lowat`] is `Some`. Failures are ignored.
+    pub fn arm(stream: &impl std::os::fd::AsFd, cursor: &ReadCursor) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if let Some(n) = cursor.recv_lowat() {
+                let fd = stream.as_fd().as_raw_fd();
+                if set_recv_lowat_fd(fd, n).is_ok() {
+                    return Self { fd: Some(fd) };
+                }
+            }
+            Self { fd: None }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (stream, cursor);
+            Self {}
+        }
+    }
+}
+
+impl Drop for RecvLowatGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(fd) = self.fd.take() {
+            let _ = set_recv_lowat_fd(fd, 1);
+        }
+    }
+}
+
+#[cfg(all(unix, test))]
+fn set_recv_lowat(stream: &impl std::os::fd::AsFd, n: usize) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    set_recv_lowat_fd(stream.as_fd().as_raw_fd(), n)
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn set_recv_lowat_fd(fd: std::os::fd::RawFd, n: usize) -> std::io::Result<()> {
+    let val = n.max(1) as libc::c_int;
+    // SAFETY: `fd` is a live socket for the guard's lifetime; `SO_RCVLOWAT` takes `c_int`.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVLOWAT,
+            (&val as *const libc::c_int).cast(),
+            std::mem::size_of_val(&val) as libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
@@ -260,5 +351,108 @@ pub async fn read_some_timeout(
     match timeout(dur, read_some(stream, scratch, max)).await {
         Ok(r) => r,
         Err(_) => Err(Error::Msg("read timeout".into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cursor(bytes: &[u8]) -> ReadCursor {
+        ReadCursor::from_vec(bytes.to_vec())
+    }
+
+    fn len_prefix(msg_len: u32, extra: usize) -> Vec<u8> {
+        let mut v = msg_len.to_be_bytes().to_vec();
+        v.resize(4 + extra, 0);
+        v
+    }
+
+    #[test]
+    fn frame_remaining_needs_length_prefix() {
+        assert_eq!(cursor(&[]).frame_remaining(), None);
+        assert_eq!(cursor(&[0, 0, 0]).frame_remaining(), None);
+    }
+
+    #[test]
+    fn frame_remaining_keepalive_complete() {
+        assert_eq!(cursor(&[0, 0, 0, 0]).frame_remaining(), Some(0));
+        assert!(cursor(&[0, 0, 0, 0]).has_complete_frame());
+    }
+
+    #[test]
+    fn frame_remaining_piece_body() {
+        // 16 KiB PIECE: len = 9 + 16384 = 16393
+        let c = cursor(&len_prefix(16393, 0));
+        assert_eq!(c.frame_remaining(), Some(16393));
+        assert_eq!(c.recv_lowat(), Some(16393));
+
+        let mid = cursor(&len_prefix(16393, 10_000));
+        assert_eq!(mid.frame_remaining(), Some(6393));
+        assert_eq!(mid.recv_lowat(), Some(6393));
+
+        let almost = cursor(&len_prefix(16393, 13_000));
+        assert_eq!(almost.frame_remaining(), Some(3393));
+        assert_eq!(almost.recv_lowat(), None);
+
+        let done = cursor(&len_prefix(16393, 16393));
+        assert_eq!(done.frame_remaining(), Some(0));
+        assert!(done.has_complete_frame());
+        assert_eq!(done.recv_lowat(), None);
+    }
+
+    #[test]
+    fn recv_lowat_caps_at_wire_chunk() {
+        let c = cursor(&len_prefix(MAX_MESSAGE_LENGTH as u32, 0));
+        assert_eq!(c.frame_remaining(), Some(MAX_MESSAGE_LENGTH));
+        assert_eq!(c.recv_lowat(), Some(WIRE_READ_CHUNK));
+    }
+
+    #[test]
+    fn recv_lowat_skips_oversized_length() {
+        let c = cursor(&((MAX_MESSAGE_LENGTH as u32) + 1).to_be_bytes());
+        assert_eq!(c.frame_remaining(), None);
+        assert_eq!(c.recv_lowat(), None);
+        assert!(!c.has_complete_frame());
+    }
+
+    #[test]
+    fn recv_lowat_skips_small_control() {
+        // HAVE: len=5
+        assert_eq!(cursor(&len_prefix(5, 0)).recv_lowat(), None);
+    }
+
+    /// Close with less than `SO_RCVLOWAT` queued must still complete the read
+    /// (EOF / leftover), not park forever.
+    #[cfg(unix)]
+    #[compio::test]
+    async fn rcvlowat_close_unblocks() {
+        use compio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let s = std::net::TcpStream::connect(addr).unwrap();
+            let _ = s.set_nodelay(true);
+            use std::io::Write;
+            let mut s = s;
+            s.write_all(&[1, 2, 3, 4, 5]).unwrap();
+            // FIN with 5 bytes queued; peer has lowat 16 KiB.
+            drop(s);
+        });
+
+        let (mut server, _) = listener.accept().await.unwrap();
+        set_recv_lowat(&server, 16 * 1024).unwrap();
+        let mut scratch = Vec::new();
+        let n = timeout(
+            Duration::from_secs(2),
+            read_some(&mut server, &mut scratch, 64 * 1024),
+        )
+        .await
+        .expect("close with high SO_RCVLOWAT must not hang")
+        .unwrap();
+        // Leftover bytes and/or EOF — not a hang.
+        assert!(n == 0 || scratch[..n] == [1, 2, 3, 4, 5]);
+        client.join().unwrap();
     }
 }

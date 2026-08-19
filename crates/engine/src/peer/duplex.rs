@@ -12,9 +12,10 @@
 //!
 //! **Wake model (K19):** inter-socket progress (hash, stall, Requests, rate-limit
 //! sleep) never holds a Compio socket future across `select`. Socket park is a
-//! single `read_some`. All BT frames, including PIECE, land in `read_buf` and
-//! go through [`parse_available_messages`]. Writer idle select is only
-//! cmd/HAVE/keepalive (no write future in select).
+//! single `read_some`. Mid-frame (known length, remainder ≥ 4 KiB) raises
+//! `SO_RCVLOWAT` for that park only. All BT frames, including PIECE, land in
+//! `read_buf` and go through [`parse_available_messages`]. Writer idle select
+//! is only cmd/HAVE/keepalive (no write future in select).
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -235,7 +236,7 @@ async fn reader_loop(
         },
     );
     let mut read_buf = net::ReadCursor::from_vec(initial_plain);
-    let mut scratch = Vec::with_capacity(WIRE_READ_CHUNK);
+    let mut scratch = Vec::with_capacity(net::WIRE_READ_CHUNK);
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
     let mut last_useful_at = Instant::now();
@@ -445,10 +446,11 @@ async fn reader_loop(
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
+        let _lowat = net::RecvLowatGuard::arm(&rd, &read_buf);
         match read_some_until(
             &mut rd,
             &mut scratch,
-            WIRE_READ_CHUNK,
+            net::WIRE_READ_CHUNK,
             park_deadline,
             stop_rx.as_ref(),
         )
@@ -692,9 +694,6 @@ async fn reader_inter_socket(
         close: false,
     }
 }
-
-/// Socket `read_some` max. Covers several 16 KiB PIECE frames per recv.
-const WIRE_READ_CHUNK: usize = 64 * 1024;
 
 /// Compio `read_some` with optional stall deadline and optional stop-wake.
 ///
