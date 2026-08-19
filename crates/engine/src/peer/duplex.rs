@@ -27,7 +27,7 @@ use flume::{Receiver as FlumeReceiver, Sender as FlumeSender};
 use futures::future::FutureExt;
 use futures::{select_biased, try_join};
 
-use crate::catalog::bitfield_size_bytes;
+use crate::catalog::{bitfield_size_bytes, count_have_bits};
 use crate::crypto::Rc4;
 use crate::error::Result;
 use crate::hot::{HotTorrent, PeerAvailability};
@@ -44,9 +44,10 @@ use super::config::PeerConfig;
 use super::download::PeerDownload;
 use super::established::{parse_available_messages, PURE_LEECH_EXIT_TIMEOUT};
 use super::helpers::{
-    clear_dl_queue, enqueue_have_messages, enqueue_have_messages_from, publish_am_interested,
-    publish_dl_queue, publish_peer_choking, publish_upload_pending, KEEPALIVE_INTERVAL,
-    REQUEST_STALL, REQUEST_STALL_ENDGAME,
+    clear_dl_queue, connection_transfer_busy, enqueue_have_messages, enqueue_have_messages_from,
+    idle_close_limit, note_or_expire_idle, publish_am_interested, publish_dl_queue,
+    publish_peer_choking, publish_upload_pending, KEEPALIVE_INTERVAL, REQUEST_STALL,
+    REQUEST_STALL_ENDGAME,
 };
 use super::out_queue::OutProgress;
 use super::send::PeerSend;
@@ -237,6 +238,7 @@ async fn reader_loop(
     let mut scratch = Vec::with_capacity(WIRE_READ_CHUNK);
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
+    let mut last_useful_at = Instant::now();
     let mut am_interested = want_download;
     let mut sent_not_interested = false;
     let mut pipe_state = PipelineAdaptState::new(pipe_initial, &pipe_tuning);
@@ -264,6 +266,7 @@ async fn reader_loop(
         &mut fast,
         &mut peer_interested,
         &mut last_piece_at,
+        &mut last_useful_at,
         &torrent,
         &cfg,
         downloading0,
@@ -360,11 +363,20 @@ async fn reader_loop(
             on_piece.as_ref(),
             &mut last_piece_at,
             &mut last_interested,
+            &mut last_useful_at,
             am_interested,
             downloading,
             read_buf.has_complete_frame(),
         )
         .await;
+        if progress.close {
+            tracing::debug!(
+                torrent = %torrent.name,
+                "closing idle peer"
+            );
+            out.reader_done();
+            break 'read;
+        }
         if progress.reloop {
             continue;
         }
@@ -378,6 +390,7 @@ async fn reader_loop(
                 &mut fast,
                 &mut peer_interested,
                 &mut last_piece_at,
+                &mut last_useful_at,
                 &torrent,
                 &cfg,
                 downloading,
@@ -426,16 +439,29 @@ async fn reader_loop(
         } else {
             None
         };
+        let idle_deadline = idle_park_deadline(last_useful_at, &cfg, &torrent, &dl);
+        let park_deadline = match (stall_deadline, idle_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         match read_some_until(
             &mut rd,
             &mut scratch,
             WIRE_READ_CHUNK,
-            stall_deadline,
+            park_deadline,
             stop_rx.as_ref(),
         )
         .await?
         {
             None => {
+                if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
+                    tracing::debug!(
+                        torrent = %torrent.name,
+                        "closing idle peer"
+                    );
+                    out.reader_done();
+                    break 'read;
+                }
                 let outstanding = dl.outstanding();
                 if outstanding > 0 {
                     let _ = dl.cancel_outstanding(&mut out);
@@ -461,6 +487,7 @@ async fn reader_loop(
             &mut fast,
             &mut peer_interested,
             &mut last_piece_at,
+            &mut last_useful_at,
             &torrent,
             &cfg,
             downloading,
@@ -484,6 +511,55 @@ struct InterSocketProgress {
     need_fill: bool,
     /// True when progress already slept or otherwise wants another loop without socket.
     reloop: bool,
+    /// Idle timer fired — drop this connection.
+    close: bool,
+}
+
+fn upload_pending_now(cfg: &PeerConfig) -> u64 {
+    cfg.upload_pending
+        .as_ref()
+        .map(|a| a.load(Ordering::Relaxed))
+        .unwrap_or(0)
+}
+
+fn peer_is_seed(dl: &PeerDownload, torrent: &HotTorrent) -> bool {
+    torrent.piece_count > 0
+        && count_have_bits(&dl.peer_bf, torrent.piece_count) >= torrent.piece_count
+}
+
+fn idle_should_close(
+    last_useful: &mut Instant,
+    cfg: &PeerConfig,
+    torrent: &HotTorrent,
+    dl: &PeerDownload,
+) -> bool {
+    let busy = connection_transfer_busy(upload_pending_now(cfg), !dl.hashing.is_empty());
+    note_or_expire_idle(
+        last_useful,
+        torrent.is_complete(),
+        peer_is_seed(dl, torrent),
+        cfg.redundant_seed_idle,
+        cfg.useless_peer_idle,
+        busy,
+    )
+}
+
+fn idle_park_deadline(
+    last_useful: Instant,
+    cfg: &PeerConfig,
+    torrent: &HotTorrent,
+    dl: &PeerDownload,
+) -> Option<Instant> {
+    if connection_transfer_busy(upload_pending_now(cfg), !dl.hashing.is_empty()) {
+        return None;
+    }
+    idle_close_limit(
+        torrent.is_complete(),
+        peer_is_seed(dl, torrent),
+        cfg.redundant_seed_idle,
+        cfg.useless_peer_idle,
+    )
+    .map(|d| last_useful + d)
 }
 
 /// Hash drain, pipeline adapt, stall requeue, Request top-up, download rate sleep.
@@ -500,10 +576,18 @@ async fn reader_inter_socket(
     on_piece: Option<&Arc<dyn Fn(i64, u32, u32) + Send + Sync>>,
     last_piece_at: &mut Instant,
     last_interested: &mut Instant,
+    last_useful_at: &mut Instant,
     am_interested: bool,
     downloading: bool,
     has_complete_frame: bool,
 ) -> InterSocketProgress {
+    if idle_should_close(last_useful_at, cfg, torrent, dl) {
+        return InterSocketProgress {
+            need_fill: false,
+            reloop: false,
+            close: true,
+        };
+    }
     if downloading {
         let bytes = cfg
             .wire_down
@@ -588,6 +672,7 @@ async fn reader_inter_socket(
                 return InterSocketProgress {
                     need_fill: false,
                     reloop: true,
+                    close: false,
                 };
             }
         }
@@ -596,6 +681,7 @@ async fn reader_inter_socket(
     InterSocketProgress {
         need_fill,
         reloop: false,
+        close: false,
     }
 }
 

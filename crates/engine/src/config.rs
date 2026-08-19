@@ -380,9 +380,12 @@ pub struct LimitsConfig {
     /// Inbound accepts are refused when at the cap (before handshake).
     pub max_connections: u32,
     /// Close seed↔seed (both complete, idle) after this many seconds (default 15).
-    /// **0** = never close on this timer. General leech idle-close is not used
-    /// (inbound useless peers tend to reconnect immediately).
+    /// **0** = never close on this timer (falls through to `useless_peer_idle_secs`).
     pub redundant_seed_idle_secs: u64,
+    /// Close peers with no actual transfer after this many seconds (default 60).
+    /// **0** = off. HAVE / KeepAlive / Interested / outstanding Requests / still
+    /// needing the torrent do not count as transfer.
+    pub useless_peer_idle_secs: u64,
 }
 
 impl Default for LimitsConfig {
@@ -395,6 +398,7 @@ impl Default for LimitsConfig {
             seed_dial_peers: false,
             max_connections: 2048,
             redundant_seed_idle_secs: 15,
+            useless_peer_idle_secs: 60,
         }
     }
 }
@@ -711,6 +715,11 @@ pub fn apply_env_overrides(cfg: &mut Config) {
             cfg.limits.redundant_seed_idle_secs = n;
         }
     }
+    if let Ok(v) = env::var("SEEDCHAMP_USELESS_PEER_IDLE_SECS") {
+        if let Ok(n) = v.parse() {
+            cfg.limits.useless_peer_idle_secs = n;
+        }
+    }
     if let Ok(v) = env::var("SEEDCHAMP_TRACKER_MAX_CONCURRENT_PER_HOST") {
         if let Ok(n) = v.parse() {
             cfg.tracker.max_concurrent_per_host = n;
@@ -952,6 +961,9 @@ pub const TEMPLATE_HEADER: &str = r#"# seedchamp configuration
 #   env: SEEDCHAMP_MAX_CONNECTIONS
 # limits.redundant_seed_idle_secs: close seed↔seed idle peers (default 15; 0 = off)
 #   env: SEEDCHAMP_REDUNDANT_SEED_IDLE_SECS
+# limits.useless_peer_idle_secs: close peers with no actual transfer (default 60; 0 = off)
+#   env: SEEDCHAMP_USELESS_PEER_IDLE_SECS
+#   HAVE/KeepAlive/Interested/outstanding Requests do not reset. Ingest and upload do.
 # catalog.soft_delete_purge_days: hard-remove soft-deleted catalog rows after N days
 #   on startup (default 30; 0 = never). Never deletes downloaded payload files.
 # tracker.numwant: peers requested per announce (default 50)
@@ -1134,6 +1146,7 @@ mod tests {
         assert_eq!(c.limits.max_peers, 40);
         assert_eq!(c.limits.max_connections, 2048);
         assert_eq!(c.limits.redundant_seed_idle_secs, 15);
+        assert_eq!(c.limits.useless_peer_idle_secs, 60);
     }
 
     #[test]

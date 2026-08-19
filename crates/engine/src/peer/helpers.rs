@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flume::Receiver as FlumeReceiver;
 
@@ -24,6 +24,51 @@ pub(crate) const REQUEST_STALL: Duration = Duration::from_secs(20);
 pub(crate) const REQUEST_STALL_ENDGAME: Duration = Duration::from_secs(4);
 /// BEP3 idle KeepAlive (and NAT refresh) when neither side has written recently.
 pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(120);
+
+/// Deadline for idle-close. Seed↔seed uses `redundant` when set; otherwise `useless`.
+/// **None** = this peer class is not closed on a timer (`0` in config).
+pub(crate) fn idle_close_limit(
+    we_seed: bool,
+    peer_is_seed: bool,
+    redundant: Duration,
+    useless: Duration,
+) -> Option<Duration> {
+    if we_seed && peer_is_seed && !redundant.is_zero() {
+        return Some(redundant);
+    }
+    if useless.is_zero() {
+        None
+    } else {
+        Some(useless)
+    }
+}
+
+/// Actual transfer on this connection: we have upload queued, or a piece from
+/// this peer is hashing. HAVE, KeepAlive, Interested, outstanding Requests, and
+/// torrent-level downloading do not count — those stay true on stalled 0 B/s
+/// rows and would never fire the useless timer mid-leech.
+pub(crate) fn connection_transfer_busy(upload_pending: u64, hashing: bool) -> bool {
+    upload_pending > 0 || hashing
+}
+
+/// Update `last_useful` when busy; return true when the idle timer has fired.
+pub(crate) fn note_or_expire_idle(
+    last_useful: &mut Instant,
+    we_seed: bool,
+    peer_is_seed: bool,
+    redundant: Duration,
+    useless: Duration,
+    busy: bool,
+) -> bool {
+    if busy {
+        *last_useful = Instant::now();
+        return false;
+    }
+    let Some(limit) = idle_close_limit(we_seed, peer_is_seed, redundant, useless) else {
+        return false;
+    };
+    last_useful.elapsed() >= limit
+}
 
 pub(crate) struct WireCrypto {
     pub encrypt: Rc4,
@@ -185,6 +230,29 @@ mod tests {
         push_suggest(&mut q, 100, 128);
         assert_eq!(q.iter().filter(|&&i| i == 100).count(), 1);
         assert_eq!(q.front(), Some(&100));
+    }
+
+    #[test]
+    fn idle_close_prefers_redundant_for_seed_seed() {
+        let r = Duration::from_secs(15);
+        let u = Duration::from_secs(60);
+        assert_eq!(idle_close_limit(true, true, r, u), Some(r));
+        assert_eq!(
+            idle_close_limit(true, true, Duration::ZERO, u),
+            Some(u),
+            "redundant off falls through to useless"
+        );
+        assert_eq!(idle_close_limit(true, false, r, u), Some(u));
+        assert_eq!(idle_close_limit(false, true, r, u), Some(u));
+        assert_eq!(idle_close_limit(false, false, r, u), Some(u));
+        assert_eq!(idle_close_limit(true, false, r, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn transfer_busy_only_upload_or_hash() {
+        assert!(!connection_transfer_busy(0, false));
+        assert!(connection_transfer_busy(1, false));
+        assert!(connection_transfer_busy(0, true));
     }
 
     #[test]

@@ -420,6 +420,7 @@ impl super::SessionRuntime {
                     stop_rx: Some(stop_rx),
                     on_bound: None,
                     redundant_seed_idle: Duration::from_secs(cfg.redundant_seed_idle_secs),
+                    useless_peer_idle: Duration::from_secs(cfg.useless_peer_idle_secs),
                     send_buffer_bytes: cfg.send_buffer_bytes,
                     recv_buffer_bytes: cfg.recv_buffer_bytes,
                     wire_limiter: Some(inner.wire_limiter.clone()),

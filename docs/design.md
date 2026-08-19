@@ -143,7 +143,7 @@ TUI (UI thread)  →  Control plane  →  accept (seedchamp-acc)  →  least-pee
 | Aggregate stats | Open FDs / io_uring slots |
 
 **Activate (hot):** `start` / `sync_want_start` loads the torrent into `HotRegistry`.  
-**Deactivate:** `stop` removes it and flushes stats. Recheck and inbound peers do not load a cold torrent. There is no idle-peer eviction.
+**Deactivate:** `stop` removes it and flushes stats. Recheck and inbound peers do not load a cold torrent.
 
 ---
 
@@ -222,6 +222,17 @@ Override Linux FS gate for `auto`: `SEEDCHAMP_UPLOAD_COMPIO_FS=all`.
 - Always unchoke interested peers.
 - Global `max_upload_bps` / `max_download_bps` (`0` = unlimited). Non-zero: token bucket; upload gates PIECE payload; download gates outbound Requests.
 - Upload slots / per-torrent caps: [roadmap.md](roadmap.md).
+
+### Idle peer close
+
+Two timers (`0` = off). HAVE and KeepAlive do not reset them. The reader parks on the earlier of request-stall and idle so a quiet seed session still wakes.
+
+| Timer | Default | When |
+|-------|---------|------|
+| `limits.redundant_seed_idle_secs` | 15 | Both sides complete and there is no transfer |
+| `limits.useless_peer_idle_secs` | 60 | No actual transfer (no ingested block, no upload queue, no hash in flight) |
+
+Seed↔seed uses the redundant timer when it is on; otherwise the useless timer. Interested, outstanding Requests, and torrent-level downloading do not reset the clock. Mid-leech 0 B/s rows close after the useless timer.
 
 ---
 

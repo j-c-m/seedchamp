@@ -11,6 +11,7 @@ fn maps_buffers_limits_and_tracker() {
     c.limits.seed_dial_peers = true;
     c.limits.max_connections = 100;
     c.limits.redundant_seed_idle_secs = 0;
+    c.limits.useless_peer_idle_secs = 90;
     c.tracker.max_concurrent_per_host = 3;
     c.tracker.startup_stagger_ms = 10;
     c.tracker.max_inflight_announces = 4;
@@ -23,6 +24,7 @@ fn maps_buffers_limits_and_tracker() {
     assert!(rt.seed_dial_peers);
     assert_eq!(rt.max_connections, 100);
     assert_eq!(rt.redundant_seed_idle_secs, 0);
+    assert_eq!(rt.useless_peer_idle_secs, 90);
     assert_eq!(rt.max_concurrent_per_host, 3);
     assert_eq!(rt.startup_stagger_ms, 10);
     assert_eq!(rt.max_inflight_announces, 4);

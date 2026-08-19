@@ -268,6 +268,7 @@ fn spawn_inbound(
                 ltep_client: inner2.cfg.ltep_client.clone(),
                 listen_port: inner2.cfg.listen.port(),
                 redundant_seed_idle: Duration::from_secs(inner2.cfg.redundant_seed_idle_secs),
+                useless_peer_idle: Duration::from_secs(inner2.cfg.useless_peer_idle_secs),
                 send_buffer_bytes: 0,
                 recv_buffer_bytes: 0,
                 wire_limiter: Some(inner2.wire_limiter.clone()),

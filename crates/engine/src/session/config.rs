@@ -44,6 +44,8 @@ pub struct RuntimeConfig {
     pub max_connections: usize,
     /// Close seed↔seed (both complete, idle) after this many seconds. **0** = off.
     pub redundant_seed_idle_secs: u64,
+    /// Close peers with no actual transfer after this many seconds. **0** = off.
+    pub useless_peer_idle_secs: u64,
     /// `SO_SNDBUF` request; 0 = kernel default.
     pub send_buffer_bytes: u64,
     /// `SO_RCVBUF` request; 0 = kernel default.
@@ -92,6 +94,7 @@ impl Default for RuntimeConfig {
             seed_dial_peers: false,
             max_connections: 2048,
             redundant_seed_idle_secs: 15,
+            useless_peer_idle_secs: 60,
             send_buffer_bytes: 0,
             recv_buffer_bytes: 0,
             max_concurrent_per_host: 2,
@@ -150,6 +153,7 @@ impl RuntimeConfig {
             seed_dial_peers: cfg.limits.seed_dial_peers,
             max_connections: cfg.limits.max_connections.max(1) as usize,
             redundant_seed_idle_secs: cfg.limits.redundant_seed_idle_secs,
+            useless_peer_idle_secs: cfg.limits.useless_peer_idle_secs,
             send_buffer_bytes: cfg.network.send_buffer_bytes,
             recv_buffer_bytes: cfg.network.recv_buffer_bytes,
             max_concurrent_per_host: cfg.tracker.max_concurrent_per_host,

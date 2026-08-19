@@ -61,6 +61,9 @@ pub struct PeerConfig {
     pub listen_port: u16,
     /// Close seed↔seed (both complete, no transfer) after this long. **Zero** = off.
     pub redundant_seed_idle: Duration,
+    /// Close when there is no actual transfer for this long. **Zero** = off.
+    /// Seed↔seed uses `redundant_seed_idle` instead when that timer is on.
+    pub useless_peer_idle: Duration,
     /// `SO_SNDBUF` request; 0 = kernel default (outbound dial).
     pub send_buffer_bytes: u64,
     /// `SO_RCVBUF` request; 0 = kernel default (outbound dial).
@@ -101,6 +104,7 @@ impl Default for PeerConfig {
             ltep_client: crate::library::default_ltep_client(),
             listen_port: 6881,
             redundant_seed_idle: Duration::from_secs(15),
+            useless_peer_idle: Duration::from_secs(60),
             send_buffer_bytes: 0,
             recv_buffer_bytes: 0,
             wire_limiter: None,

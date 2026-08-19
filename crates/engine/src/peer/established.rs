@@ -39,6 +39,7 @@ pub(crate) fn parse_available_messages(
     fast: &mut FastSession,
     peer_interested: &mut bool,
     last_piece_at: &mut Instant,
+    last_useful_at: &mut Instant,
     torrent: &HotTorrent,
     cfg: &PeerConfig,
     downloading: bool,
@@ -67,7 +68,9 @@ pub(crate) fn parse_available_messages(
                             return Err(Error::Msg("hash thread not configured".into()));
                         };
                         if dl.handle_piece(hash_tx, hash_pool, index, begin, block)? {
-                            *last_piece_at = Instant::now();
+                            let now = Instant::now();
+                            *last_piece_at = now;
+                            *last_useful_at = now;
                             if let Some(ref c) = cfg.wire_down {
                                 c.fetch_add(block.len() as u64, Ordering::Relaxed);
                             }
