@@ -468,6 +468,13 @@ impl StagingPool {
     }
 }
 
+impl Drop for StagingPool {
+    /// Return assembling buffers so a dropped peer cannot starve the torrent pool.
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 /// Max assembling pieces one peer may hold (hash/write does not count).
 ///
 /// Enough to fill `pipeline` blocks, but never more than `1/16` of the
@@ -583,6 +590,32 @@ mod tests {
             .is_empty());
         assert!(!pool.clear_request(0, 0, 1));
         assert_eq!(pool.total_outstanding(), 3);
+    }
+
+    #[test]
+    fn drop_returns_assembling_buffers_to_shared_pool() {
+        let plen = BLOCK_SIZE * 2;
+        let shared = Arc::new(super::super::piece_pool::PieceBufferPool::new(
+            plen,
+            2 * plen as u64,
+        ));
+        assert_eq!(shared.available(), 2);
+        {
+            let mut a = StagingPool::from_pool(Arc::clone(&shared));
+            assert!(a.try_start(0, plen));
+            assert_eq!(shared.available(), 1);
+            let mut b = StagingPool::from_pool(Arc::clone(&shared));
+            assert!(b.try_start(1, plen));
+            assert_eq!(shared.available(), 0);
+            assert!(!StagingPool::from_pool(Arc::clone(&shared)).try_start(2, plen));
+        }
+        assert_eq!(
+            shared.available(),
+            2,
+            "disconnect must not leak staging slots"
+        );
+        let mut c = StagingPool::from_pool(Arc::clone(&shared));
+        assert!(c.try_start(0, plen));
     }
 
     #[test]
