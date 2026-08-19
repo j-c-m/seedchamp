@@ -39,10 +39,4 @@ seedchamp-tui = { path = "crates/tui" }
 seedchamp-import = { path = "crates/import" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
-# Held at ~3.4.6 on purpose (do not bump to 3.5+ without checking nix):
-#   ctrlc 3.4.x → nix ^0.29
-#   ctrlc 3.5.0–3.5.1 → nix ^0.30
-#   ctrlc 3.5.2+ → nix ^0.31
-# seedchamp-engine is on nix 0.29; a newer ctrlc would reintroduce a dual nix
-# in the lockfile. Bump only when engine can move to the same nix major/minor.
-ctrlc = "~3.4.6"
+ctrlc = "3.5"
