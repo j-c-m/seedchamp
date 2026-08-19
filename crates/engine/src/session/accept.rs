@@ -33,6 +33,7 @@ use socket2::Socket as Socket2;
 use crate::peer::{run_inbound_peer, PeerConfig};
 use crate::runtime::PeerWorkerPool;
 
+use super::dial_policy::record_idle_close;
 use super::snapshot::PeerCrypto;
 use super::{Inner, LivePeer, PeerDirection, TorrentBytes};
 
@@ -205,6 +206,7 @@ fn spawn_inbound(
             let q_out = Arc::new(AtomicU64::new(0));
             let q_tgt = Arc::new(AtomicU64::new(0));
             let stop = Arc::new(AtomicBool::new(false));
+            let idle_closed = Arc::new(AtomicBool::new(false));
             let (stop_tx, stop_rx) = flume::bounded::<()>(0);
             let on_piece = {
                 let i = Arc::clone(&inner2);
@@ -272,10 +274,23 @@ fn spawn_inbound(
                 send_buffer_bytes: 0,
                 recv_buffer_bytes: 0,
                 wire_limiter: Some(inner2.wire_limiter.clone()),
+                idle_closed: Some(idle_closed.clone()),
             };
             inner2.peer_connects.fetch_add(1, Ordering::Relaxed);
             if let Err(e) = run_inbound_peer(stream, reg, pcfg).await {
                 tracing::debug!(%addr, error = %e, "inbound end");
+            }
+            if idle_closed.load(Ordering::Relaxed) {
+                let tid = inner2
+                    .peers
+                    .read()
+                    .get(&pid)
+                    .map(|p| p.torrent_id)
+                    .unwrap_or(0);
+                if tid != 0 {
+                    let mut cool = inner2.dial_cooldown.lock();
+                    record_idle_close(&mut cool, tid, addr, Instant::now());
+                }
             }
             inner2.peer_disconnects.fetch_add(1, Ordering::Relaxed);
             stop.store(true, Ordering::SeqCst);

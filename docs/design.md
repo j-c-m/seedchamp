@@ -232,7 +232,7 @@ Two timers (`0` = off). HAVE and KeepAlive do not reset them. The reader parks o
 | `limits.redundant_seed_idle_secs` | 15 | Both sides complete and there is no transfer |
 | `limits.useless_peer_idle_secs` | 60 | No actual transfer (no ingested block, no upload queue, no hash in flight) |
 
-Seed↔seed uses the redundant timer when it is on; otherwise the useless timer. Interested, outstanding Requests, and torrent-level downloading do not reset the clock. Mid-leech 0 B/s rows close after the useless timer.
+Seed↔seed uses the redundant timer when it is on; otherwise the useless timer. Interested, outstanding Requests, and torrent-level downloading do not reset the clock. Mid-leech 0 B/s rows close after the useless timer. An idle-close holds that listen address out of outbound dial on the same torrent for 300s (no fail backoff).
 
 ---
 

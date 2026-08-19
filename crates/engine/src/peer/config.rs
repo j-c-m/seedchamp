@@ -70,6 +70,8 @@ pub struct PeerConfig {
     pub recv_buffer_bytes: u64,
     /// Global wire rate limiter (`0` caps = unlimited, free path).
     pub wire_limiter: Option<Arc<WireRateLimiter>>,
+    /// Set when the session closed on the idle timer (no ingest / upload).
+    pub idle_closed: Option<Arc<AtomicBool>>,
 }
 
 impl Default for PeerConfig {
@@ -108,6 +110,7 @@ impl Default for PeerConfig {
             send_buffer_bytes: 0,
             recv_buffer_bytes: 0,
             wire_limiter: None,
+            idle_closed: None,
         }
     }
 }

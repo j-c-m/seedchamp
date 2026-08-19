@@ -55,11 +55,34 @@ pub(super) fn light_disconnect_cooldown(
     addr: SocketAddr,
     now: Instant,
 ) {
+    hold_until(map, torrent_id, addr, now, Duration::from_secs(30));
+}
+
+/// Idle-close: do not redial this listen endpoint on this torrent for 300s.
+/// Does not increment fail backoff (they were live, just not transferring).
+pub(super) const IDLE_REDIAL: Duration = Duration::from_secs(300);
+
+pub(super) fn record_idle_close(
+    map: &mut HashMap<(i64, SocketAddr), DialData>,
+    torrent_id: i64,
+    addr: SocketAddr,
+    now: Instant,
+) {
+    hold_until(map, torrent_id, addr, now, IDLE_REDIAL);
+}
+
+fn hold_until(
+    map: &mut HashMap<(i64, SocketAddr), DialData>,
+    torrent_id: i64,
+    addr: SocketAddr,
+    now: Instant,
+    hold: Duration,
+) {
     let e = map.entry((torrent_id, addr)).or_insert(DialData {
         next_ok: now,
         fails: 0,
     });
-    let quiet = now + Duration::from_secs(30);
+    let quiet = now + hold;
     if e.next_ok < quiet {
         e.next_ok = quiet;
     }
@@ -101,5 +124,18 @@ mod tests {
         record_dial_fail(&mut map, 1, a, now);
         assert!(is_cooled_down(&map, 1, a, now));
         assert!(!is_cooled_down(&map, 1, a, now + Duration::from_secs(31)));
+    }
+
+    #[test]
+    fn idle_close_blocks_redial_without_fail_backoff() {
+        let mut map = HashMap::new();
+        let now = Instant::now();
+        let a = addr(6881);
+        record_idle_close(&mut map, 1, a, now);
+        assert!(is_cooled_down(&map, 1, a, now));
+        assert!(is_cooled_down(&map, 1, a, now + Duration::from_secs(299)));
+        assert!(!is_cooled_down(&map, 1, a, now + Duration::from_secs(301)));
+        assert_eq!(map.get(&(1, a)).map(|d| d.fails), Some(0));
+        assert!(!is_cooled_down(&map, 2, a, now), "other torrent ok");
     }
 }

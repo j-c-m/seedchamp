@@ -14,7 +14,7 @@ use super::announce::ANNOUNCE_DEFAULT_MIN_INTERVAL_SECS;
 use super::dial::{merge_outbound_peers, PEER_CACHE_DIAL_LOAD};
 use super::dial_policy::{
     clear_dial_fail, is_cooled_down, light_disconnect_cooldown, record_dial_fail,
-    record_dial_soft_fail,
+    record_dial_soft_fail, record_idle_close,
 };
 use super::snapshot::PeerCrypto;
 use super::{LivePeer, PeerDirection, TorrentBytes};
@@ -338,6 +338,7 @@ impl super::SessionRuntime {
         let cfg = self.inner.cfg.clone();
         let hash = self.inner.hash.clone();
         let connected_at = Instant::now();
+        let idle_closed = Arc::new(AtomicBool::new(false));
         let on_piece = {
             let inner = self.inner.clone();
             Arc::new(move |tid, idx, len| {
@@ -424,6 +425,7 @@ impl super::SessionRuntime {
                     send_buffer_bytes: cfg.send_buffer_bytes,
                     recv_buffer_bytes: cfg.recv_buffer_bytes,
                     wire_limiter: Some(inner.wire_limiter.clone()),
+                    idle_closed: Some(idle_closed.clone()),
                 };
                 inner.peer_connects.fetch_add(1, Ordering::Relaxed);
                 let result = run_outbound_peer(addr, torrent, pcfg).await;
@@ -431,15 +433,19 @@ impl super::SessionRuntime {
                 let lived = now.saturating_duration_since(connected_at);
                 {
                     let mut cool = inner.dial_cooldown.lock();
-                    match &result {
-                        Err(_) => record_dial_fail(&mut cool, tid, addr, now),
-                        Ok(()) if lived < Duration::from_secs(5) => {
-                            record_dial_soft_fail(&mut cool, tid, addr, now);
+                    if idle_closed.load(Ordering::Relaxed) {
+                        record_idle_close(&mut cool, tid, addr, now);
+                    } else {
+                        match &result {
+                            Err(_) => record_dial_fail(&mut cool, tid, addr, now),
+                            Ok(()) if lived < Duration::from_secs(5) => {
+                                record_dial_soft_fail(&mut cool, tid, addr, now);
+                            }
+                            Ok(()) if lived >= Duration::from_secs(30) => {
+                                clear_dial_fail(&mut cool, tid, addr);
+                            }
+                            Ok(()) => light_disconnect_cooldown(&mut cool, tid, addr, now),
                         }
-                        Ok(()) if lived >= Duration::from_secs(30) => {
-                            clear_dial_fail(&mut cool, tid, addr);
-                        }
-                        Ok(()) => light_disconnect_cooldown(&mut cool, tid, addr, now),
                     }
                 }
                 if let Err(e) = result {

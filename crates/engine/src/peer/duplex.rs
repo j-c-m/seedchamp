@@ -370,6 +370,7 @@ async fn reader_loop(
         )
         .await;
         if progress.close {
+            mark_idle_closed(&cfg);
             tracing::debug!(
                 torrent = %torrent.name,
                 "closing idle peer"
@@ -455,6 +456,7 @@ async fn reader_loop(
         {
             None => {
                 if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
+                    mark_idle_closed(&cfg);
                     tracing::debug!(
                         torrent = %torrent.name,
                         "closing idle peer"
@@ -513,6 +515,12 @@ struct InterSocketProgress {
     reloop: bool,
     /// Idle timer fired — drop this connection.
     close: bool,
+}
+
+fn mark_idle_closed(cfg: &PeerConfig) {
+    if let Some(ref f) = cfg.idle_closed {
+        f.store(true, Ordering::Relaxed);
+    }
 }
 
 fn upload_pending_now(cfg: &PeerConfig) -> u64 {
