@@ -29,7 +29,7 @@ impl HotTorrent {
         if wanted {
             let prev_missing =
                 self.download_missing
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                         Some(n.saturating_sub(1))
                     });
             if matches!(prev_missing, Ok(1)) {
