@@ -212,7 +212,7 @@ pub fn parse_announce_response(bytes: &[u8]) -> Result<AnnounceResponse> {
         }
     }
     if let Some(peers) = v.dict_get_bytes("peers") {
-        for chunk in peers.chunks_exact(6) {
+        for chunk in peers.as_chunks::<6>().0 {
             let ip = std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
             let port = u16::from_be_bytes([chunk[4], chunk[5]]);
             out.peers.push(std::net::SocketAddr::from((ip, port)));

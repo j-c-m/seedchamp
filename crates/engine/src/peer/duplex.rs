@@ -14,8 +14,9 @@
 //! sleep) never holds a Compio socket future across `select`. Socket park is a
 //! single `read_some`. While the torrent is still downloading, mid-frame
 //! remainder or, experimentally, `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)`
-//! when Requests are in flight. After the leech completes, `SO_RCVLOWAT` stays
-//! 1. Stall timeout skips speculation once so queued bytes drain.
+//! when Requests are in flight. After the leech completes, `SO_RCVLOWAT` stays at 1.
+//! Stall timeout skips speculation once so queued bytes drain.
+//!
 //! All BT frames, including PIECE, land in
 //! `read_buf` and go through [`parse_available_messages`]. Writer idle select
 //! is only cmd/HAVE/keepalive (no write future in select).

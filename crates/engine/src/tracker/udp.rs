@@ -136,7 +136,7 @@ fn parse_announce_response_udp(buf: &[u8], n: usize, tid: u32) -> Result<Announc
         incomplete: Some(leechers),
     };
     let peers = &buf[20..n];
-    for chunk in peers.chunks_exact(6) {
+    for chunk in peers.as_chunks::<6>().0 {
         let ip = std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
         let port = u16::from_be_bytes([chunk[4], chunk[5]]);
         if port != 0 {
