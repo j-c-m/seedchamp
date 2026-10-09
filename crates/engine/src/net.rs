@@ -203,15 +203,25 @@ impl ReadCursor {
         Some(need.min(WIRE_READ_CHUNK))
     }
 
-    /// Park lowat: mid-frame remainder, or experimental
-    /// `min(outstanding × block, rcvbuf/2, 256KiB)` when `speculative`.
+    /// Park lowat while a leech is in progress: mid-frame remainder, or
+    /// experimental `min(outstanding × block, rcvbuf/2, 256KiB)` when
+    /// `speculative`.
+    ///
+    /// `downloading == false` (leech complete) returns `None` so the park
+    /// leaves `SO_RCVLOWAT` at 1. kqueue will not mark a socket readable
+    /// until the watermark is met; a seed peer's requests, HAVE, and a
+    /// closed connection with a short recv queue would never wake.
     pub fn recv_lowat_park(
         &self,
         outstanding: usize,
         block: usize,
         rcvbuf: usize,
         speculative: bool,
+        downloading: bool,
     ) -> Option<usize> {
+        if !downloading {
+            return None;
+        }
         let frame = self.recv_lowat();
         let spec = if speculative {
             pipeline_lowat(outstanding, block, rcvbuf)
@@ -255,11 +265,14 @@ impl RecvLowatGuard {
         block: usize,
         rcvbuf: usize,
         speculative: bool,
+        downloading: bool,
     ) -> Self {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
-            if let Some(n) = cursor.recv_lowat_park(outstanding, block, rcvbuf, speculative) {
+            if let Some(n) =
+                cursor.recv_lowat_park(outstanding, block, rcvbuf, speculative, downloading)
+            {
                 let fd = stream.as_fd().as_raw_fd();
                 if set_recv_lowat_fd(fd, n).is_ok() {
                     return Self { fd: Some(fd) };
@@ -269,7 +282,15 @@ impl RecvLowatGuard {
         }
         #[cfg(not(unix))]
         {
-            let _ = (stream, cursor, outstanding, block, rcvbuf, speculative);
+            let _ = (
+                stream,
+                cursor,
+                outstanding,
+                block,
+                rcvbuf,
+                speculative,
+                downloading,
+            );
             Self {}
         }
     }
@@ -519,13 +540,30 @@ mod tests {
     fn park_prefers_larger_of_frame_and_pipeline() {
         let c = cursor(&len_prefix(16393, 0));
         const B: usize = crate::staging::BLOCK_SIZE as usize;
-        assert_eq!(c.recv_lowat_park(4, B, 128 * 1024, true), Some(4 * B));
-        assert_eq!(c.recv_lowat_park(4, B, 128 * 1024, false), Some(16393));
+        assert_eq!(c.recv_lowat_park(4, B, 128 * 1024, true, true), Some(4 * B));
         assert_eq!(
-            cursor(&[]).recv_lowat_park(4, B, 128 * 1024, true),
+            c.recv_lowat_park(4, B, 128 * 1024, false, true),
+            Some(16393)
+        );
+        assert_eq!(
+            cursor(&[]).recv_lowat_park(4, B, 128 * 1024, true, true),
             Some(64 * 1024)
         );
-        assert_eq!(cursor(&[]).recv_lowat_park(4, B, 128 * 1024, false), None);
+        assert_eq!(
+            cursor(&[]).recv_lowat_park(4, B, 128 * 1024, false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn park_lowat_off_when_not_downloading() {
+        const B: usize = crate::staging::BLOCK_SIZE as usize;
+        let mid = cursor(&len_prefix(16393, 0));
+        assert_eq!(mid.recv_lowat_park(4, B, 128 * 1024, true, false), None);
+        assert_eq!(
+            cursor(&[]).recv_lowat_park(32, B, 2 * 1024 * 1024, true, false),
+            None
+        );
     }
 
     /// Close with less than `SO_RCVLOWAT` queued must still complete the read
