@@ -1,6 +1,7 @@
 //! Non-blocking control handle for TUI/CLI.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -21,6 +22,8 @@ pub struct ControlHandle {
     /// Events from engine; TUI drains with `try_recv` each frame.
     pub(super) event_rx: Arc<std::sync::Mutex<mpsc::Receiver<ControlEvent>>>,
     pub(super) session: Arc<RwLock<Option<SessionRuntime>>>,
+    /// Generation counter for `ListCatalog` requests (TUI list fresh/stale).
+    pub(super) list_seq: Arc<AtomicU64>,
 }
 
 impl ControlHandle {
@@ -83,8 +86,13 @@ impl ControlHandle {
     }
 
     /// Enqueue full catalog list for TUI (catalog reader). Poll `CatalogList` / `CatalogListFailed`.
-    pub fn request_list_catalog(&self, filter: String) -> Result<()> {
-        self.send(EngineCommand::ListCatalog { filter })
+    ///
+    /// Returns the list generation; the reader echoes it back in the reply event
+    /// so callers can ignore stale (pre-delete) lists.
+    pub fn request_list_catalog(&self, filter: String) -> Result<u64> {
+        let seq = self.list_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        self.send(EngineCommand::ListCatalog { filter, seq })?;
+        Ok(seq)
     }
 
     /// Non-blocking: one event if ready.

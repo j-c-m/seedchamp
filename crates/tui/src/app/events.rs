@@ -77,9 +77,13 @@ impl super::App {
     }
 
     /// Queue full-list SQL on the catalog reader (never blocks).
-    pub(super) fn kick_catalog_list(&self) {
+    /// Records the kicked generation so delete tombstones can tell stale
+    /// (pre-delete) `CatalogList`s from fresh ones.
+    pub(super) fn kick_catalog_list(&mut self) {
         if let Some(c) = &self.control {
-            let _ = c.request_list_catalog(self.filter.clone());
+            if let Ok(seq) = c.request_list_catalog(self.filter.clone()) {
+                self.pending_gone.kicked(seq);
+            }
         }
     }
 
@@ -95,15 +99,16 @@ impl super::App {
         filter: String,
         mut rows: Vec<seedchamp_engine::TorrentListRow>,
         limits: seedchamp_engine::SessionLimits,
+        seq: u64,
     ) -> bool {
         if filter != self.filter {
             self.kick_catalog_list();
             return false;
         }
-        // Optimistic Ctrl-D / :remove: hide until SoftDeleted/Removed or *Failed.
-        if !self.pending_gone.is_empty() {
-            rows.retain(|r| !self.pending_gone.contains(&r.id));
-        }
+        // Delete tombstones: hide rows whose SQL ran before the delete
+        // committed; a newer generation drops the tombstone (row truly gone
+        // or legitimately restored — either way stop hiding it).
+        self.pending_gone.apply(&mut rows, seq);
         let keep = self.selected_torrent_id;
         self.rows = rows;
         self.selected_torrent_id = keep;
@@ -157,12 +162,13 @@ impl super::App {
                     filter,
                     rows,
                     limits,
+                    seq,
                 } => {
-                    if self.apply_catalog_list(filter, rows, limits) {
+                    if self.apply_catalog_list(filter, rows, limits, seq) {
                         list_applied = true;
                     }
                 }
-                ControlEvent::CatalogListFailed { filter, error } => {
+                ControlEvent::CatalogListFailed { filter, error, .. } => {
                     if filter == self.filter {
                         if self.rows.is_empty() {
                             self.note_event(format!("catalog busy: {error}"));
@@ -268,32 +274,46 @@ impl super::App {
                     self.note_event(format!("#{id} relocate failed: {error}"));
                 }
                 ControlEvent::SoftDeleted { id } => {
-                    self.pending_gone.remove(&id);
+                    // Keep the tombstone: a CatalogList whose SQL ran before the
+                    // delete committed may still be in flight and must not
+                    // resurrect the row.
+                    self.pending_gone.confirmed(id);
                     if self.selected_torrent_id == Some(id) {
                         self.detail = None;
                         self.files_torrent_id = None;
                     }
+                    // A stale list applied before this confirm already put the
+                    // row back; drop it now so the scroll offset cannot stick
+                    // one row down until the post-confirm list arrives.
+                    self.rows.retain(|r| r.id != id);
+                    self.restore_selection();
                     // Row already gone optimistically; re-SQL for catalog truth.
                     self.note_event(format!("#{id} deleted (soft)"));
                     self.request_catalog_list();
                 }
                 ControlEvent::SoftDeleteFailed { id, error } => {
-                    self.pending_gone.remove(&id);
+                    self.pending_gone.failed(id);
                     self.note_event(format!("#{id} delete failed: {error}"));
                     // Allow the row back via catalog list.
                     self.request_catalog_list();
                 }
                 ControlEvent::Removed { id } => {
-                    self.pending_gone.remove(&id);
+                    // Same stale-list hazard as SoftDeleted: keep the tombstone
+                    // until a list kicked after this confirm proves it fresh.
+                    self.pending_gone.confirmed(id);
                     if self.selected_torrent_id == Some(id) {
                         self.detail = None;
                         self.files_torrent_id = None;
                     }
+                    // See SoftDeleted: evict a row a stale list may have
+                    // reinserted so the scroll offset cannot stick.
+                    self.rows.retain(|r| r.id != id);
+                    self.restore_selection();
                     self.note_event(format!("#{id} removed"));
                     self.request_catalog_list();
                 }
                 ControlEvent::RemoveFailed { id, error } => {
-                    self.pending_gone.remove(&id);
+                    self.pending_gone.failed(id);
                     self.note_event(format!("#{id} remove failed: {error}"));
                     self.request_catalog_list();
                 }

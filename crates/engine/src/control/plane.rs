@@ -35,6 +35,7 @@ pub fn spawn_control_plane(
         cmd_tx,
         event_rx: Arc::new(std::sync::Mutex::new(event_rx)),
         session: session_slot.clone(),
+        list_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
 
     let join = thread::Builder::new()
@@ -176,9 +177,9 @@ fn control_thread_main(
                     break;
                 }
             }
-            Ok(EngineCommand::ListCatalog { filter }) => {
+            Ok(EngineCommand::ListCatalog { filter, seq }) => {
                 if read_tx
-                    .send(CatalogReadJob::ListCatalog { filter })
+                    .send(CatalogReadJob::ListCatalog { filter, seq })
                     .is_err()
                 {
                     break;

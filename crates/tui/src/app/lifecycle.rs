@@ -89,7 +89,7 @@ impl super::App {
             watch_cfg: watch,
             _watch: None,
             row_ui: HashMap::new(),
-            pending_gone: HashSet::new(),
+            pending_gone: super::delete_filter::DeleteTombstones::default(),
             list_sort,
             last_refresh: Instant::now() - Duration::from_secs(10),
             last_sql: Instant::now() - Duration::from_secs(10),

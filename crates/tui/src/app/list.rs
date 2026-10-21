@@ -68,9 +68,11 @@ impl super::App {
     ///
     /// Call only after a successful control `request_*`. Selection stays on the
     /// same line via [`Self::restore_selection`]. Id stays in `pending_gone`
-    /// until SoftDeleted/Removed or *Failed so CatalogList cannot reinsert it.
+    /// so a stale CatalogList whose SQL ran before the delete commits cannot
+    /// reinsert it; the first list kicked after the SoftDeleted/Removed
+    /// confirm clears it (see [`super::delete_filter::DeleteTombstones`]).
     pub(super) fn optimistic_remove_row(&mut self, id: i64) {
-        self.pending_gone.insert(id);
+        self.pending_gone.optimistic_remove(id);
         self.rows.retain(|r| r.id != id);
         self.row_ui.remove(&id);
         if self.selected_torrent_id == Some(id) {

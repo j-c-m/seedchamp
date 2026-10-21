@@ -5,6 +5,7 @@
 //! **catalog reader** (`seedchamp-cread`). Add-from-URL runs on a background thread.
 
 mod commands;
+mod delete_filter;
 mod events;
 mod files;
 mod lifecycle;
@@ -215,10 +216,10 @@ pub struct App {
     _watch: Option<WatchHandle>,
     /// Per-torrent transient UI status (recheck progress / result).
     pub row_ui: HashMap<i64, RowUiStatus>,
-    /// Ids dropped from the list optimistically (Ctrl-D / :remove). Strip from
-    /// CatalogList until SoftDeleted/Removed or *Failed so stale SQL cannot
-    /// resurrect a row still present in SQLite.
-    pending_gone: HashSet<i64>,
+    /// Delete tombstones (Ctrl-D / `:remove`): hides ids from stale
+    /// `CatalogList`s whose SQL ran before the delete committed. See
+    /// [`delete_filter::DeleteTombstones`].
+    pending_gone: delete_filter::DeleteTombstones,
     /// List sort mode (from config, changeable with `o` / `:sort`).
     pub list_sort: ListSort,
     last_refresh: Instant,

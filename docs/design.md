@@ -290,7 +290,7 @@ Disk path (leech writes):
 
 - Arrows / `j` `k`; documented help (`?`)
 - **`Ctrl+s`** start/stop selected torrent (`want_start`); bare **`s`** = Status screen
-- **Ctrl-D** soft-delete / **`:remove`** hard-remove: stopped torrents only; list row drops immediately; catalog mutate is async; stale `CatalogList` cannot resurrect pending ids until SoftDeleted/Removed or *Failed
+- **Ctrl-D** soft-delete / **`:remove`** hard-remove: stopped torrents only; list row drops immediately; catalog mutate is async; a pending id stays hidden from every `CatalogList` through the SoftDeleted/Removed confirm (each list carries a generation echoed by the catalog reader; only the first list kicked after the confirm may show the id again, e.g. a same-infohash re-add); *Failed drops the tombstone so the row returns
 - Command palette (`:`) for power ops (recheck, limits, …). Relocate is **Ctrl-O** only (no `:relocate`).
 - **Ctrl-O relocate** uses the leech_cache handoff path: publish dest (hardlink/copy, source stays) → catalog `data_root` → live layout swap → unpublish this torrent's source files (wipe the tree only for `{leech_cache}/{infohash}`). Staged torrents retarget `home_root` only. Seed fill during the window can open either path; ENOENT retries once with a fresh layout.
 

@@ -352,3 +352,54 @@ fn control_remove_rejects_started() {
 
     handle.shutdown();
 }
+
+/// Each `ListCatalog` request mints a strictly increasing generation that the
+/// catalog reader echoes back. The TUI relies on this to tell a stale
+/// (pre-delete) list from a fresh one, so a delete confirm followed by a new
+/// list must observe a newer generation than any in-flight stale reply.
+#[test]
+fn control_list_catalog_echoes_request_seq() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("c.sqlite");
+    let _cat = Catalog::open(&db).unwrap();
+    drop(_cat);
+
+    let cfg = RuntimeConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        announce: false,
+        peer_workers: Some(2),
+        ..RuntimeConfig::default()
+    };
+    let (handle, _plane) = spawn_control_plane(&db, cfg).unwrap();
+    wait_ready(&handle);
+
+    // Wait for the reply to the first request before kicking the second so
+    // reader coalescing cannot merge the two jobs into one reply.
+    let s1 = handle.request_list_catalog(String::new()).unwrap();
+    wait_catalog_list(&handle, s1);
+
+    let s2 = handle.request_list_catalog(String::new()).unwrap();
+    assert!(s2 > s1, "list generations must increase");
+    wait_catalog_list(&handle, s2);
+
+    handle.shutdown();
+}
+
+fn wait_catalog_list(handle: &super::ControlHandle, want: u64) {
+    for _ in 0..300 {
+        for e in handle.drain_events() {
+            match e {
+                ControlEvent::CatalogList { seq, .. } if seq == want => return,
+                ControlEvent::CatalogList { seq, .. } => {
+                    panic!("unexpected CatalogList seq {seq}, wanted {want}");
+                }
+                ControlEvent::CatalogListFailed { error, seq, .. } => {
+                    panic!("CatalogList seq {seq} failed: {error}");
+                }
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("never received CatalogList seq {want}");
+}

@@ -20,13 +20,22 @@ pub(super) fn catalog_reader_worker(
     while let Ok(job) = rx.recv() {
         match job {
             CatalogReadJob::Shutdown => break,
-            CatalogReadJob::ListCatalog { filter: filter0 } => {
+            CatalogReadJob::ListCatalog {
+                filter: filter0,
+                seq: seq0,
+            } => {
                 // Coalesce: only the latest filter in the queue matters.
+                // The echoed seq is the newest coalesced generation so the TUI
+                // treats the reply as fresh (it supersedes every dropped job).
                 let mut filter = filter0;
+                let mut seq = seq0;
                 while let Ok(more) = rx.try_recv() {
                     match more {
                         CatalogReadJob::Shutdown => return,
-                        CatalogReadJob::ListCatalog { filter: f } => filter = f,
+                        CatalogReadJob::ListCatalog { filter: f, seq: s } => {
+                            filter = f;
+                            seq = s;
+                        }
                     }
                 }
 
@@ -37,6 +46,7 @@ pub(super) fn catalog_reader_worker(
                     let _ = events.send(ControlEvent::CatalogListFailed {
                         filter,
                         error: "catalog open failed".into(),
+                        seq,
                     });
                     continue;
                 };
@@ -53,6 +63,7 @@ pub(super) fn catalog_reader_worker(
                                 filter,
                                 rows,
                                 limits,
+                                seq,
                             });
                         }
                         Err(e) => {
@@ -60,6 +71,7 @@ pub(super) fn catalog_reader_worker(
                             let _ = events.send(ControlEvent::CatalogListFailed {
                                 filter,
                                 error: e.to_string(),
+                                seq,
                             });
                         }
                     },
@@ -68,6 +80,7 @@ pub(super) fn catalog_reader_worker(
                         let _ = events.send(ControlEvent::CatalogListFailed {
                             filter,
                             error: e.to_string(),
+                            seq,
                         });
                     }
                 }

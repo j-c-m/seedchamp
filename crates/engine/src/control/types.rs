@@ -38,8 +38,11 @@ pub enum EngineCommand {
         limits: SessionLimits,
     },
     /// Full TUI list (`list_torrents_filtered` + session limits) on the catalog **reader**.
+    /// `seq` is a TUI-issued generation echoed back in `CatalogList` so the TUI
+    /// can tell stale (pre-delete) lists from fresh ones.
     ListCatalog {
         filter: String,
+        seq: u64,
     },
     Shutdown,
 }
@@ -115,14 +118,17 @@ pub enum ControlEvent {
         error: String,
     },
     /// Full catalog list for TUI (catalog reader thread).
+    /// `seq` echoes the `ListCatalog` generation that produced these rows.
     CatalogList {
         filter: String,
         rows: Vec<TorrentListRow>,
         limits: SessionLimits,
+        seq: u64,
     },
     CatalogListFailed {
         filter: String,
         error: String,
+        seq: u64,
     },
     Ready {
         listen: String,
@@ -157,6 +163,6 @@ pub(super) enum MutationJob {
 
 /// Jobs for the catalog **read-only** worker (`seedchamp-cread`).
 pub(super) enum CatalogReadJob {
-    ListCatalog { filter: String },
+    ListCatalog { filter: String, seq: u64 },
     Shutdown,
 }
