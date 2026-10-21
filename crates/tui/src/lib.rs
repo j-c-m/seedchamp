@@ -153,8 +153,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App
 
 /// Keep the alternate screen alive while quit-time `event=stopped` runs.
 ///
-/// Status line shows `quitting — stopped announce N/M…` (and retry lines) from
-/// the engine snapshot until the control session is torn down.
+/// Status line shows `quitting — stopped announce N/M…` from the engine
+/// snapshot until the control session is torn down.
 fn run_shutdown_ui(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,

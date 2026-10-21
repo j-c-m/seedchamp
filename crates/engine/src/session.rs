@@ -390,10 +390,9 @@ impl SessionRuntime {
 
     /// Signal stop, then shut down the peer I/O Compio pool from this thread.
     ///
-    /// Before tearing down the pool, sends `event=stopped` for every hot torrent
-    /// and **waits until each succeeds** (tracker accepted the announce). Retries
-    /// on failure; quit does not proceed until all succeed. Explicit per-torrent
-    /// stop remains fire-and-forget (see [`Self::stop_torrent`]).
+    /// Before tearing down the pool, sends one `event=stopped` per hot torrent
+    /// and waits for that attempt to finish. A failed tracker is not retried.
+    /// Explicit per-torrent stop remains fire-and-forget (see [`Self::stop_torrent`]).
     ///
     /// Must be called from a **non-async** context (control plane). Prefer
     /// [`PeerWorkerPool::shutdown`] over dropping the last pool `Arc` on a
@@ -407,8 +406,8 @@ impl SessionRuntime {
         self.pool.shutdown();
     }
 
-    /// `event=stopped` for every active torrent, in parallel. Blocks until every
-    /// torrent has a successful tracker response (retries with backoff).
+    /// One `event=stopped` per active torrent, in parallel. Waits until every
+    /// attempt finishes (the BEP 12 tier walk inside [`announce_for`]). No retry.
     fn announce_stopped_all(&self) {
         if !self.inner.cfg.announce {
             return;
@@ -435,10 +434,7 @@ impl SessionRuntime {
         let user_agent = self.inner.cfg.http_user_agent.clone();
         let numwant = self.inner.cfg.numwant;
         *self.inner.status.write() = format!("quitting — stopped announce 0/{n}…");
-        tracing::info!(
-            n,
-            "quit: event=stopped for active torrents (wait for success)"
-        );
+        tracing::info!(n, "quit: event=stopped for active torrents (one attempt)");
 
         let inner = self.inner.clone();
         // Quit stopped-announce runs on the tracker Compio runtime (cyper HTTP).
@@ -459,58 +455,46 @@ impl SessionRuntime {
                 for (t, uploaded, downloaded) in jobs {
                     let limiter = limiter.clone();
                     let user_agent = user_agent.clone();
-                    let status_inner = inner.clone();
                     pending.push(async move {
                         let id = t.id;
                         let name = t.name.clone();
-                        let mut attempt = 0u32;
-                        loop {
-                            attempt = attempt.saturating_add(1);
-                            let out = announce_for(
-                                &t,
-                                &peer_id,
-                                port,
-                                Some("stopped"),
-                                uploaded,
-                                downloaded,
-                                &limiter,
-                                &user_agent,
-                                numwant,
-                            )
-                            .await;
-                            if out.ok {
-                                tracing::info!(
-                                    id,
-                                    torrent = %name,
-                                    attempt,
-                                    "quit: stopped announce ok"
-                                );
-                                return id;
-                            }
-                            let backoff_s = u64::from(attempt.min(10));
+                        let out = announce_for(
+                            &t,
+                            &peer_id,
+                            port,
+                            Some("stopped"),
+                            uploaded,
+                            downloaded,
+                            &limiter,
+                            &user_agent,
+                            numwant,
+                        )
+                        .await;
+                        if out.ok {
+                            tracing::info!(id, torrent = %name, "quit: stopped announce ok");
+                        } else {
                             tracing::warn!(
                                 id,
                                 torrent = %name,
-                                attempt,
-                                backoff_s,
-                                "quit: stopped announce failed — retrying"
+                                status = out.last_status.as_deref().unwrap_or("failed"),
+                                "quit: stopped announce failed"
                             );
-                            // Surface retry in TUI status while quit UI is still painting.
-                            *status_inner.status.write() = format!(
-                                "quitting — #{id} stopped announce failed (try {attempt}) — retry {backoff_s}s"
-                            );
-                            compio::time::sleep(Duration::from_secs(backoff_s)).await;
                         }
+                        out.ok
                     });
                 }
 
                 let mut done = 0usize;
-                while let Some(_id) = pending.next().await {
+                let mut ok = 0usize;
+                while let Some(success) = pending.next().await {
                     done += 1;
-                    *inner.status.write() = format!("quitting — stopped announce {done}/{n} ok");
+                    if success {
+                        ok += 1;
+                    }
+                    *inner.status.write() = format!("quitting — stopped announce {done}/{n}");
                 }
                 *inner.status.write() = format!("quitting — stopped announce {n}/{n} done");
-                tracing::info!(n, "quit: all stopped announces succeeded");
+                tracing::info!(n, ok, "quit: stopped announces finished");
             }
         });
     }

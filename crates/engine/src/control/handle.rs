@@ -145,10 +145,11 @@ impl ControlHandle {
         self.session.read().is_some()
     }
 
-    /// Block until control finishes quit-time stopped announces and tears down.
+    /// Block until control finishes the one-shot quit `event=stopped` announces
+    /// and tears down.
     ///
-    /// No wall-clock abort — force-clearing the session mid-announce would drop
-    /// in-flight stopped events. Non-blocking: [`Self::request_shutdown`].
+    /// Each torrent is announced once. An attempt already on the wire is not
+    /// aborted. Non-blocking: [`Self::request_shutdown`].
     pub fn shutdown(&self) {
         self.request_shutdown();
         while self.session_alive() {

@@ -158,6 +158,8 @@ TUI (UI thread)  →  Control plane  →  accept (seedchamp-acc)  →  least-pee
 - Multi-tracker (BEP 12)
 - Compact peer lists
 
+Live announces follow the tracker interval. A total failure is retried after 300s. Quit and per-torrent stop each send one `event=stopped` (BEP 12 tier walk, first success). Quit waits for that attempt to finish, then tears down. A down tracker is not retried and does not hold the process.
+
 PEX and DHT are out of scope. Magnet / ut_metadata: see [roadmap.md](roadmap.md).
 
 ### Peer session
