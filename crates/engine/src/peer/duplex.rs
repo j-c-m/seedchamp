@@ -16,6 +16,9 @@
 //! remainder or, experimentally, `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)`
 //! when Requests are in flight. After the leech completes, `SO_RCVLOWAT` stays at 1.
 //! Stall timeout skips speculation once so queued bytes drain.
+//! A read park with no stall and no idle deadline still ends after
+//! [`SOCKET_OP_LIMIT`]; expiry retries `recv` and does not drop the peer.
+//! One upload `pump` uses the same cap; expiry drops the peer.
 //!
 //! All BT frames, including PIECE, land in
 //! `read_buf` and go through [`parse_available_messages`]. Writer idle select
@@ -51,10 +54,10 @@ use super::established::{parse_available_messages, PURE_LEECH_EXIT_TIMEOUT};
 use super::helpers::{
     clear_dl_queue, connection_transfer_busy, enqueue_have_messages, enqueue_have_messages_from,
     idle_close_limit, note_or_expire_idle, publish_am_interested, publish_dl_queue,
-    publish_peer_choking, publish_upload_pending, KEEPALIVE_INTERVAL, REQUEST_STALL,
-    REQUEST_STALL_ENDGAME,
+    publish_peer_choking, publish_upload_pending, read_park_at, KEEPALIVE_INTERVAL, REQUEST_STALL,
+    REQUEST_STALL_ENDGAME, SOCKET_OP_LIMIT,
 };
-use super::out_queue::OutProgress;
+use super::out_queue::{OutProgress, SendOutcome};
 use super::send::PeerSend;
 
 /// Commands from the read half → write half (ordered with encrypt/write).
@@ -448,10 +451,7 @@ async fn reader_loop(
             None
         };
         let idle_deadline = idle_park_deadline(last_useful_at, &cfg, &torrent, &dl);
-        let park_deadline = match (stall_deadline, idle_deadline) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let (park_at, liveness_only) = read_park_at(stall_deadline, idle_deadline, Instant::now());
         let speculative = !skip_speculative;
         skip_speculative = false;
         let block =
@@ -469,11 +469,14 @@ async fn reader_loop(
             &mut rd,
             &mut scratch,
             net::WIRE_READ_CHUNK,
-            park_deadline,
+            Some(park_at),
             stop_rx.as_ref(),
         )
         .await?
         {
+            // Cap only: drop the parked read and recv again. Do not Cancel
+            // live requests. A closed socket completes this next recv.
+            None if liveness_only => continue,
             None => {
                 if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
                     mark_idle_closed(&cfg);
@@ -783,16 +786,16 @@ async fn writer_loop(
         if send.out.can_progress_write() {
             // Allow finishing in-flight work after reader is done.
             let allow_up = cfg.allow_upload || send.out.has_work();
-            let outcome = send
-                .pump(
-                    &mut wr,
-                    &torrent,
-                    &cfg,
-                    encrypt.as_mut(),
-                    allow_up,
-                    fast_enabled,
-                )
-                .await?;
+            let outcome = pump_limited(
+                &mut send,
+                &mut wr,
+                &torrent,
+                &cfg,
+                encrypt.as_mut(),
+                allow_up,
+                fast_enabled,
+            )
+            .await?;
             if let OutProgress::RateLimited(wait) = outcome.kind {
                 // Plain sleep only — do not race stop_rx on the rate-limit hot path.
                 sleep(wait).await;
@@ -872,16 +875,16 @@ async fn writer_loop(
     // Best-effort final flush of control.
     let deadline = Instant::now() + Duration::from_secs(2);
     while send.out.has_work() && Instant::now() < deadline {
-        let outcome = send
-            .pump(
-                &mut wr,
-                &torrent,
-                &cfg,
-                encrypt.as_mut(),
-                false,
-                fast_enabled,
-            )
-            .await?;
+        let outcome = pump_limited(
+            &mut send,
+            &mut wr,
+            &torrent,
+            &cfg,
+            encrypt.as_mut(),
+            false,
+            fast_enabled,
+        )
+        .await?;
         if matches!(
             outcome.kind,
             OutProgress::Idle | OutProgress::RateLimited(_)
@@ -890,6 +893,30 @@ async fn writer_loop(
         }
     }
     Ok(())
+}
+
+/// One `pump`. Expiry cancels the fill or `write_all` and fails the peer.
+async fn pump_limited(
+    send: &mut PeerSend,
+    wr: &mut TcpStream,
+    torrent: &HotTorrent,
+    cfg: &PeerConfig,
+    encrypt: Option<&mut Rc4>,
+    allow_upload: bool,
+    fast_enabled: bool,
+) -> Result<SendOutcome> {
+    match timeout(
+        SOCKET_OP_LIMIT,
+        send.pump(wr, torrent, cfg, encrypt, allow_upload, fast_enabled),
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            tracing::debug!(torrent = %torrent.name, "socket write stalled");
+            Err("socket write stalled".into())
+        }
+    }
 }
 
 /// Apply one writer command. Returns true if `ReaderDone`.

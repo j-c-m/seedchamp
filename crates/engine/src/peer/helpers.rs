@@ -25,6 +25,32 @@ pub(crate) const REQUEST_STALL_ENDGAME: Duration = Duration::from_secs(4);
 /// BEP3 idle KeepAlive (and NAT refresh) when neither side has written recently.
 pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(120);
 
+/// Max time one parked socket op may sit: an unbounded read park, or one upload
+/// `pump` (disk fill plus one `write_all`).
+///
+/// Read expiry retries `recv`. Write expiry drops the peer so a partial frame
+/// is not sent again.
+pub(crate) const SOCKET_OP_LIMIT: Duration = Duration::from_secs(120);
+
+/// When the read should leave `read_some`, and whether that wake is only
+/// [`SOCKET_OP_LIMIT`].
+///
+/// Stall and idle keep their deadlines. When both are absent, the park ends
+/// after the cap so the next `recv` runs: a closed socket returns bytes, EOF,
+/// or an error, and a quiet open socket parks again.
+pub(crate) fn read_park_at(
+    stall: Option<Instant>,
+    idle: Option<Instant>,
+    now: Instant,
+) -> (Instant, bool) {
+    match (stall, idle) {
+        (Some(a), Some(b)) => (a.min(b), false),
+        (Some(a), None) => (a, false),
+        (None, Some(b)) => (b, false),
+        (None, None) => (now + SOCKET_OP_LIMIT, true),
+    }
+}
+
 /// Deadline for idle-close. Seed↔seed uses `redundant` when set; otherwise `useless`.
 /// **None** = this peer class is not closed on a timer (`0` in config).
 pub(crate) fn idle_close_limit(
@@ -253,6 +279,22 @@ mod tests {
         assert!(!connection_transfer_busy(0, false));
         assert!(connection_transfer_busy(1, false));
         assert!(connection_transfer_busy(0, true));
+    }
+
+    #[test]
+    fn read_park_uses_cap_only_when_stall_and_idle_are_absent() {
+        let now = Instant::now();
+        let stall = now + Duration::from_secs(20);
+        let idle = now + Duration::from_secs(60);
+        assert_eq!(read_park_at(None, None, now), (now + SOCKET_OP_LIMIT, true));
+        assert_eq!(read_park_at(Some(stall), None, now), (stall, false));
+        assert_eq!(read_park_at(None, Some(idle), now), (idle, false));
+        assert_eq!(read_park_at(Some(stall), Some(idle), now), (stall, false));
+        let later_stall = now + Duration::from_secs(90);
+        assert_eq!(
+            read_park_at(Some(later_stall), Some(idle), now),
+            (idle, false)
+        );
     }
 
     #[test]

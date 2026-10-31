@@ -599,4 +599,41 @@ mod tests {
         assert!(n == 0 || scratch[..n] == [1, 2, 3, 4, 5]);
         client.join().unwrap();
     }
+
+    /// A `write_all` parked on a full window must end when the deadline wins.
+    /// Dropping that future is what cancels the kqueue op.
+    #[cfg(unix)]
+    #[compio::test]
+    async fn blocked_write_hits_deadline() {
+        use std::sync::mpsc;
+
+        use compio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let sock = std::net::TcpStream::connect(addr).unwrap();
+            let _ = SockRef::from(&sock).set_recv_buffer_size(4 * 1024);
+            let _ = release_rx.recv();
+            drop(sock);
+        });
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = SockRef::from(&stream).set_send_buffer_size(4 * 1024);
+        let payload = vec![0u8; 4 * 1024 * 1024];
+        let started = std::time::Instant::now();
+        let timed_out = timeout(
+            Duration::from_millis(400),
+            write_all_owned(&mut stream, payload),
+        )
+        .await;
+        assert!(
+            timed_out.is_err(),
+            "write into a peer that never reads must hit the deadline"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let _ = release_tx.send(());
+        peer.join().unwrap();
+    }
 }

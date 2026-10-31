@@ -236,6 +236,8 @@ Two timers (`0` = off). HAVE and KeepAlive do not reset them. The reader parks o
 
 Seed↔seed uses the redundant timer when it is on; otherwise the useless timer. Interested, outstanding Requests, and torrent-level downloading do not reset the clock. Mid-leech 0 B/s rows close after the useless timer. An idle-close holds that listen address out of outbound dial on the same torrent for 300s (no fail backoff).
 
+**Socket op cap (120 s):** one upload `pump` (disk fill plus one `write_all`) and a read park that has neither request-stall nor idle armed. Write expiry drops the peer; a partial frame is not retried. Read expiry drops the parked `recv` and reads again. A closed socket then returns the queued bytes, EOF, or an error. A quiet open socket parks for another 120 s. Queued upload counts as busy, so the useless-peer timer does not arm for that row; this cap is what releases it.
+
 ---
 
 ## 6. Disk Layer
