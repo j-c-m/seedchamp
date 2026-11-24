@@ -249,70 +249,60 @@ pub fn pipeline_lowat(outstanding: usize, block: usize, rcvbuf: usize) -> Option
     }
 }
 
-/// Raises `SO_RCVLOWAT` for a mid-frame park; restores 1 on drop.
-/// Holds a raw fd so the stream can be mutably borrowed for the read.
-pub struct RecvLowatGuard {
+/// `SO_RCVLOWAT` for one peer reader.
+///
+/// [`Self::apply`] calls `setsockopt` only when the watermark changes.
+/// On Linux each call takes the socket lock (`tcp_set_rcvlowat`). A steady
+/// leech keeps the same value, so the hot path does not touch it. Drop
+/// restores 1.
+pub struct RecvLowat {
     #[cfg(unix)]
-    fd: Option<std::os::fd::RawFd>,
+    fd: std::os::fd::RawFd,
+    #[cfg(unix)]
+    applied: usize,
 }
 
-impl RecvLowatGuard {
-    /// Arm from [`ReadCursor::recv_lowat_park`]. Failures are ignored.
-    pub fn arm(
-        stream: &impl std::os::fd::AsFd,
-        cursor: &ReadCursor,
-        outstanding: usize,
-        block: usize,
-        rcvbuf: usize,
-        speculative: bool,
-        downloading: bool,
-    ) -> Self {
+impl RecvLowat {
+    pub fn new(stream: &impl std::os::fd::AsFd) -> Self {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
-            if let Some(n) =
-                cursor.recv_lowat_park(outstanding, block, rcvbuf, speculative, downloading)
-            {
-                let fd = stream.as_fd().as_raw_fd();
-                if set_recv_lowat_fd(fd, n).is_ok() {
-                    return Self { fd: Some(fd) };
-                }
+            Self {
+                fd: stream.as_fd().as_raw_fd(),
+                applied: 1,
             }
-            Self { fd: None }
         }
         #[cfg(not(unix))]
         {
-            let _ = (
-                stream,
-                cursor,
-                outstanding,
-                block,
-                rcvbuf,
-                speculative,
-                downloading,
-            );
+            let _ = stream;
             Self {}
         }
     }
 
-    /// True when this park raised `SO_RCVLOWAT` above 1.
-    pub fn is_armed(&self) -> bool {
+    /// `want` is the park watermark from [`ReadCursor::recv_lowat_park`].
+    /// `None` means 1. Returns whether the socket watermark is above 1.
+    pub fn apply(&mut self, want: Option<usize>) -> bool {
         #[cfg(unix)]
         {
-            self.fd.is_some()
+            let want = want.unwrap_or(1).max(1);
+            if self.applied != want && set_recv_lowat_fd(self.fd, want).is_ok() {
+                self.applied = want;
+            }
+            self.applied > 1
         }
         #[cfg(not(unix))]
         {
+            let _ = want;
             false
         }
     }
 }
 
-impl Drop for RecvLowatGuard {
+impl Drop for RecvLowat {
     fn drop(&mut self) {
         #[cfg(unix)]
-        if let Some(fd) = self.fd.take() {
-            let _ = set_recv_lowat_fd(fd, 1);
+        if self.applied != 1 {
+            let _ = set_recv_lowat_fd(self.fd, 1);
         }
     }
 }
@@ -439,7 +429,7 @@ pub async fn read_some(stream: &mut TcpStream, scratch: &mut Vec<u8>, max: usize
     read_some_inner(stream, scratch, max, false).await
 }
 
-/// [`read_some`] while [`RecvLowatGuard`] is armed.
+/// [`read_some`] while [`RecvLowat`] is above 1.
 ///
 /// On Linux, Compio's `IORING_OP_RECV` is a nonblocking recv. It returns any
 /// queued bytes and does not wait for `SO_RCVLOWAT`. This submit sets
@@ -722,6 +712,52 @@ mod tests {
         assert!(scratch[..n].iter().all(|b| *b == 9));
         done_tx.send(()).unwrap();
         client.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recv_lowat_changes_only_when_the_value_changes() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || std::net::TcpStream::connect(addr).unwrap());
+        let (server, _) = listener.accept().unwrap();
+        let _client = client.join().unwrap();
+
+        let mut lowat = RecvLowat::new(&server);
+        assert!(lowat.apply(Some(8 * 1024)));
+        assert_eq!(recv_lowat_of(&server), 8 * 1024);
+        assert!(lowat.apply(Some(8 * 1024)));
+        assert_eq!(recv_lowat_of(&server), 8 * 1024);
+        assert!(!lowat.apply(None));
+        assert_eq!(recv_lowat_of(&server), 1);
+        assert!(lowat.apply(Some(16 * 1024)));
+        drop(lowat);
+        assert_eq!(recv_lowat_of(&server), 1);
+    }
+
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    fn recv_lowat_of(stream: &impl std::os::fd::AsFd) -> usize {
+        use std::os::fd::AsRawFd;
+        let mut val: libc::c_int = 0;
+        let mut len = std::mem::size_of_val(&val) as libc::socklen_t;
+        // SAFETY: `fd` is a live socket; SO_RCVLOWAT is a c_int out-parameter.
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_fd().as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_RCVLOWAT,
+                (&mut val as *mut libc::c_int).cast(),
+                &mut len,
+            )
+        };
+        assert_eq!(
+            rc,
+            0,
+            "getsockopt SO_RCVLOWAT: {}",
+            std::io::Error::last_os_error()
+        );
+        val.max(0) as usize
     }
 
     #[cfg(unix)]

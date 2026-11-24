@@ -16,7 +16,8 @@
 //! experimentally, `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)` when Requests
 //! are in flight. That park uses [`crate::net::read_some_at_lowat`] so Linux
 //! io_uring polls until `SO_RCVLOWAT`, the same wait FreeBSD kqueue already
-//! does. After the leech completes, `SO_RCVLOWAT` stays at 1.
+//! does. The watermark is changed only when the next park wants a different
+//! value. After the leech completes, the park sets `SO_RCVLOWAT` to 1.
 //! Stall timeout skips speculation once so queued bytes drain.
 //! A read park with no stall and no idle deadline still ends after
 //! [`SOCKET_OP_LIMIT`]; expiry retries `recv` and does not drop the peer.
@@ -247,6 +248,7 @@ async fn reader_loop(
     );
     let mut read_buf = net::ReadCursor::from_vec(initial_plain);
     let mut scratch = Vec::with_capacity(net::WIRE_READ_CHUNK);
+    let mut recv_lowat = net::RecvLowat::new(&rd);
     let rcvbuf = net::socket_recv_buffer(&rd).unwrap_or(0);
     let mut skip_speculative = false;
     let mut last_interested = Instant::now();
@@ -459,22 +461,20 @@ async fn reader_loop(
         skip_speculative = false;
         let block =
             (torrent.layout().piece_length as usize).min(crate::staging::BLOCK_SIZE as usize);
-        let lowat = net::RecvLowatGuard::arm(
-            &rd,
-            &read_buf,
+        let armed = recv_lowat.apply(read_buf.recv_lowat_park(
             dl.outstanding() as usize,
             block,
             rcvbuf,
             speculative,
             downloading,
-        );
+        ));
         match read_some_until(
             &mut rd,
             &mut scratch,
             net::WIRE_READ_CHUNK,
             Some(park_at),
             stop_rx.as_ref(),
-            lowat.is_armed(),
+            armed,
         )
         .await?
         {
