@@ -12,9 +12,11 @@
 //!
 //! **Wake model (K19):** inter-socket progress (hash, stall, Requests, rate-limit
 //! sleep) never holds a Compio socket future across `select`. Socket park is a
-//! single `read_some`. While the torrent is still downloading, mid-frame
-//! remainder or, experimentally, `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)`
-//! when Requests are in flight. After the leech completes, `SO_RCVLOWAT` stays at 1.
+//! single read. While the torrent is still downloading, mid-frame remainder or,
+//! experimentally, `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)` when Requests
+//! are in flight. That park uses [`crate::net::read_some_at_lowat`] so Linux
+//! io_uring polls until `SO_RCVLOWAT`, the same wait FreeBSD kqueue already
+//! does. After the leech completes, `SO_RCVLOWAT` stays at 1.
 //! Stall timeout skips speculation once so queued bytes drain.
 //! A read park with no stall and no idle deadline still ends after
 //! [`SOCKET_OP_LIMIT`]; expiry retries `recv` and does not drop the peer.
@@ -25,6 +27,7 @@
 //! is only cmd/HAVE/keepalive (no write future in select).
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -456,7 +459,7 @@ async fn reader_loop(
         skip_speculative = false;
         let block =
             (torrent.layout().piece_length as usize).min(crate::staging::BLOCK_SIZE as usize);
-        let _lowat = net::RecvLowatGuard::arm(
+        let lowat = net::RecvLowatGuard::arm(
             &rd,
             &read_buf,
             dl.outstanding() as usize,
@@ -471,6 +474,7 @@ async fn reader_loop(
             net::WIRE_READ_CHUNK,
             Some(park_at),
             stop_rx.as_ref(),
+            lowat.is_armed(),
         )
         .await?
         {
@@ -727,6 +731,7 @@ async fn read_some_until(
     max: usize,
     stall_deadline: Option<Instant>,
     stop_rx: Option<&FlumeReceiver<()>>,
+    at_lowat: bool,
 ) -> Result<Option<usize>> {
     if let Some(deadline) = stall_deadline {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -735,24 +740,39 @@ async fn read_some_until(
         }
         if let Some(rx) = stop_rx {
             select_biased! {
-                r = net::read_some(stream, scratch, max).fuse() => {
+                r = read_park(stream, scratch, max, at_lowat).fuse() => {
                     return Ok(Some(r?));
                 }
                 _ = rx.recv_async().fuse() => return Ok(Some(0)),
                 _ = sleep(left).fuse() => return Ok(None),
             }
         }
-        match timeout(left, net::read_some(stream, scratch, max)).await {
+        match timeout(left, read_park(stream, scratch, max, at_lowat)).await {
             Ok(r) => Ok(Some(r?)),
             Err(_) => Ok(None),
         }
     } else if let Some(rx) = stop_rx {
         select_biased! {
-            r = net::read_some(stream, scratch, max).fuse() => Ok(Some(r?)),
+            r = read_park(stream, scratch, max, at_lowat).fuse() => Ok(Some(r?)),
             _ = rx.recv_async().fuse() => Ok(Some(0)),
         }
     } else {
-        Ok(Some(net::read_some(stream, scratch, max).await?))
+        Ok(Some(read_park(stream, scratch, max, at_lowat).await?))
+    }
+}
+
+fn read_park<'a>(
+    stream: &'a mut TcpStream,
+    scratch: &'a mut Vec<u8>,
+    max: usize,
+    at_lowat: bool,
+) -> impl Future<Output = Result<usize>> + 'a {
+    async move {
+        if at_lowat {
+            net::read_some_at_lowat(stream, scratch, max).await
+        } else {
+            net::read_some(stream, scratch, max).await
+        }
     }
 }
 

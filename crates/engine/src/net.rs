@@ -294,6 +294,18 @@ impl RecvLowatGuard {
             Self {}
         }
     }
+
+    /// True when this park raised `SO_RCVLOWAT` above 1.
+    pub fn is_armed(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.fd.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
 }
 
 impl Drop for RecvLowatGuard {
@@ -424,6 +436,30 @@ pub async fn read_exact_crypto_timeout(
 /// bytes are read. Compio fills **capacity**, so the op uses `slice(..max)` and
 /// does **not** shrink a larger scratch (no realloc when alternating sizes).
 pub async fn read_some(stream: &mut TcpStream, scratch: &mut Vec<u8>, max: usize) -> Result<usize> {
+    read_some_inner(stream, scratch, max, false).await
+}
+
+/// [`read_some`] while [`RecvLowatGuard`] is armed.
+///
+/// On Linux, Compio's `IORING_OP_RECV` is a nonblocking recv. It returns any
+/// queued bytes and does not wait for `SO_RCVLOWAT`. This submit sets
+/// `IORING_RECVSEND_POLL_FIRST` so io_uring polls first. epoll uses the
+/// watermark, matching a FreeBSD `kqueue` read. Kernels before 5.19 ignore
+/// the flag. Other platforms keep the normal read; their poll already waits.
+pub async fn read_some_at_lowat(
+    stream: &mut TcpStream,
+    scratch: &mut Vec<u8>,
+    max: usize,
+) -> Result<usize> {
+    read_some_inner(stream, scratch, max, true).await
+}
+
+async fn read_some_inner(
+    stream: &mut TcpStream,
+    scratch: &mut Vec<u8>,
+    max: usize,
+    at_lowat: bool,
+) -> Result<usize> {
     let cap = max.max(1);
     let mut taken = std::mem::take(scratch);
     taken.clear();
@@ -432,13 +468,40 @@ pub async fn read_some(stream: &mut TcpStream, scratch: &mut Vec<u8>, max: usize
     }
     // Cap the IoBuf destination to `cap` without changing `taken.capacity()`.
     let slice = taken.slice(..cap);
-    let BufResult(r, slice) = stream.read(slice).await;
+    let BufResult(r, slice) = read_buf(stream, slice, at_lowat).await;
     let mut buf = slice.into_inner();
     let n = r.map_err(|e| Error::Msg(format!("read: {e}")))?;
     let n = n.min(cap).min(buf.len());
     buf.truncate(n);
     *scratch = buf;
     Ok(n)
+}
+
+#[allow(unsafe_code)]
+async fn read_buf<B>(stream: &mut TcpStream, buf: B, at_lowat: bool) -> BufResult<usize, B>
+where
+    B: compio::buf::IoBufMut + 'static,
+{
+    #[cfg(target_os = "linux")]
+    if at_lowat {
+        use compio::buf::SetLen;
+        use compio::driver::op::{Recv, RecvFlags};
+        use compio::driver::PollFirst;
+
+        // Clone is a `SharedFd` refcount, not a dup. The op must be `'static`.
+        let mut op = Recv::new(stream.clone(), buf, RecvFlags::empty());
+        PollFirst::poll_first(&mut op);
+        let BufResult(res, op) = compio::runtime::submit(op).await;
+        let mut buf = op.into_inner();
+        if let Ok(n) = res {
+            // SAFETY: io_uring wrote `n` initialized bytes at the start of `buf`.
+            unsafe { SetLen::advance_to(&mut buf, n) };
+        }
+        return BufResult(res, buf);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = at_lowat;
+    stream.read(buf).await
 }
 
 pub async fn read_some_timeout(
@@ -590,7 +653,7 @@ mod tests {
         let mut scratch = Vec::new();
         let n = timeout(
             Duration::from_secs(2),
-            read_some(&mut server, &mut scratch, 64 * 1024),
+            read_some_at_lowat(&mut server, &mut scratch, 64 * 1024),
         )
         .await
         .expect("close with high SO_RCVLOWAT must not hang")
@@ -598,6 +661,77 @@ mod tests {
         // Leftover bytes and/or EOF — not a hang.
         assert!(n == 0 || scratch[..n] == [1, 2, 3, 4, 5]);
         client.join().unwrap();
+    }
+
+    /// Queued bytes under `SO_RCVLOWAT` must not complete a lowat park.
+    /// The rest of the watermark must.
+    #[cfg(unix)]
+    #[compio::test]
+    async fn rcvlowat_park_waits_for_watermark() {
+        use std::io::Write;
+        use std::os::fd::{AsFd, AsRawFd};
+        use std::sync::mpsc;
+
+        use compio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let client = std::thread::spawn(move || {
+            let mut s = std::net::TcpStream::connect(addr).unwrap();
+            s.set_nodelay(true).unwrap();
+            s.write_all(&[9u8; 1024]).unwrap();
+            release_rx.recv().unwrap();
+            s.write_all(&[9u8; 7 * 1024]).unwrap();
+            done_rx.recv().unwrap();
+        });
+
+        let (mut server, _) = listener.accept().await.unwrap();
+        set_recv_lowat(&server, 8 * 1024).unwrap();
+        let fd = server.as_fd().as_raw_fd();
+        let wait_queued = std::time::Instant::now();
+        while queued_bytes(fd) < 1024 {
+            assert!(
+                wait_queued.elapsed() < Duration::from_secs(2),
+                "1 KiB never queued"
+            );
+            compio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let mut scratch = Vec::new();
+        let early = timeout(
+            Duration::from_millis(200),
+            read_some_at_lowat(&mut server, &mut scratch, 64 * 1024),
+        )
+        .await;
+        assert!(
+            early.is_err(),
+            "park returned before the watermark: {early:?} buf={scratch:?}"
+        );
+
+        release_tx.send(()).unwrap();
+        let n = timeout(
+            Duration::from_secs(2),
+            read_some_at_lowat(&mut server, &mut scratch, 64 * 1024),
+        )
+        .await
+        .expect("watermark read hung")
+        .unwrap();
+        assert!(n >= 8 * 1024, "short read {n}");
+        assert!(scratch[..n].iter().all(|b| *b == 9));
+        done_tx.send(()).unwrap();
+        client.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    fn queued_bytes(fd: std::os::fd::RawFd) -> usize {
+        let mut n: libc::c_int = 0;
+        // SAFETY: `fd` is the live accepted socket; FIONREAD writes one c_int.
+        let rc = unsafe { libc::ioctl(fd, libc::FIONREAD, &mut n) };
+        assert_eq!(rc, 0, "FIONREAD: {}", std::io::Error::last_os_error());
+        n.max(0) as usize
     }
 
     /// A `write_all` parked on a full window must end when the deadline wins.
