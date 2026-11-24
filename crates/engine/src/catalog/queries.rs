@@ -343,6 +343,31 @@ mod soft_delete_purge_tests {
     }
 
     #[test]
+    fn purge_removes_soft_deleted_with_stuck_want_start() {
+        let mut cat = Catalog::open_in_memory().unwrap();
+        let id = insert_named(&mut cat, "stuck", 4);
+        cat.mark_deleted(id).unwrap();
+        let aged = unix_now_secs() - 40 * 86_400;
+        cat.conn
+            .execute(
+                "UPDATE torrent SET deleted_at = ?1, want_start = 1, state = 'started' WHERE id = ?2",
+                params![aged, id],
+            )
+            .unwrap();
+
+        assert_eq!(cat.purge_soft_deleted(30).unwrap(), 1);
+        let n: i64 = cat
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM torrent WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
     fn restore_clears_deleted_at() {
         let mut cat = Catalog::open_in_memory().unwrap();
         let id = insert_named(&mut cat, "t", 9);

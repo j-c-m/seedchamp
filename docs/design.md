@@ -130,7 +130,7 @@ TUI (UI thread)  →  Control plane  →  accept (seedchamp-acc)  →  least-pee
 
 - **Normalized catalog** + **blob columns** for large sparse structures (bitfields, piece hashes, metainfo).
 - Bitfield: store as BLOB; complete torrents may omit dense bits when `complete=1`.
-- **Soft-delete:** `deleted` / `deleted_at` hide rows from lists; payload on disk is never removed by delete paths. Catalog-only purge after `catalog.soft_delete_purge_days` (default 30; `0` = never). Soft-delete: TUI **Ctrl-D** or CLI `torrent del`. **Hard remove:** TUI **`:remove`** drops catalog rows only (CASCADE); still keeps payload files. Both require the torrent stopped (`want_start = 0`).
+- **Soft-delete:** `deleted` / `deleted_at` hide rows from lists; payload on disk is never removed by delete paths. Catalog-only purge after `catalog.soft_delete_purge_days` (default 30; `0` = never). Purge clears a stuck `want_start` on an already soft-deleted row so one row cannot fail startup maintenance. Soft-delete: TUI **Ctrl-D** or CLI `torrent del`. **Hard remove:** TUI **`:remove`** drops catalog rows only (CASCADE); still keeps payload files. Both require the torrent stopped (`want_start = 0`).
 - **Activation:** `want_start` is the user flag for active swarm membership.
 
 ### Hot vs cold (runtime)

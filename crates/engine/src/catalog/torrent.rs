@@ -609,6 +609,13 @@ impl Catalog {
         };
         let mut n = 0usize;
         for id in ids {
+            // Already hidden from the swarm. A stuck `want_start` must not
+            // fail this purge or the rest of startup maintenance.
+            self.conn.execute(
+                "UPDATE torrent SET want_start = 0
+                 WHERE id = ?1 AND COALESCE(deleted, 0) != 0",
+                params![id],
+            )?;
             self.remove_torrent(id)?;
             n += 1;
         }
