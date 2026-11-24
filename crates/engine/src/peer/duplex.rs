@@ -28,7 +28,6 @@
 //! is only cmd/HAVE/keepalive (no write future in select).
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -761,18 +760,16 @@ async fn read_some_until(
     }
 }
 
-fn read_park<'a>(
-    stream: &'a mut TcpStream,
-    scratch: &'a mut Vec<u8>,
+async fn read_park(
+    stream: &mut TcpStream,
+    scratch: &mut Vec<u8>,
     max: usize,
     at_lowat: bool,
-) -> impl Future<Output = Result<usize>> + 'a {
-    async move {
-        if at_lowat {
-            net::read_some_at_lowat(stream, scratch, max).await
-        } else {
-            net::read_some(stream, scratch, max).await
-        }
+) -> Result<usize> {
+    if at_lowat {
+        net::read_some_at_lowat(stream, scratch, max).await
+    } else {
+        net::read_some(stream, scratch, max).await
     }
 }
 
