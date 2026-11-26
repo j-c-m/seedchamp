@@ -204,8 +204,14 @@ impl ReadCursor {
     }
 
     /// Park lowat while a leech is in progress: mid-frame remainder, or
-    /// experimental `min(outstanding × block, rcvbuf/2, 256KiB)` when
-    /// `speculative`.
+    /// experimental `min(outstanding × block, SO_RCVBUF/2, 256KiB)` when
+    /// `speculative`, clamped to the bytes that can still arrive.
+    ///
+    /// A partial frame already in this buffer is not in the socket. Counting
+    /// it toward `outstanding × block` asks for more than the peer will send
+    /// (the last blocks of a piece). Linux `IORING_RECVSEND_POLL_FIRST` and
+    /// FreeBSD kqueue then sleep until the stall timeout, and Cancel
+    /// re-requests a tail that was already queued.
     ///
     /// `downloading == false` (leech complete) returns `None` so the park
     /// leaves `SO_RCVLOWAT` at 1. kqueue will not mark a socket readable
@@ -224,7 +230,7 @@ impl ReadCursor {
         }
         let frame = self.recv_lowat();
         let spec = if speculative {
-            pipeline_lowat(outstanding, block, rcvbuf)
+            speculative_lowat(self.unparsed().len(), outstanding, block, rcvbuf)
         } else {
             None
         };
@@ -242,6 +248,27 @@ pub fn pipeline_lowat(outstanding: usize, block: usize, rcvbuf: usize) -> Option
     }
     let want = outstanding.saturating_mul(block);
     let n = want.min(rcvbuf / 2).min(PIPELINE_LOWAT_CAP);
+    if n < RCVLOWAT_MIN {
+        None
+    } else {
+        Some(n)
+    }
+}
+
+/// Speculative watermark, never above the bytes still expected on the socket.
+///
+/// `buffered` is the incomplete frame already in the user read buffer.
+/// One request occupies [`crate::wire::SIZEOF_PIECE`] + `block` on the wire.
+fn speculative_lowat(
+    buffered: usize,
+    outstanding: usize,
+    block: usize,
+    rcvbuf: usize,
+) -> Option<usize> {
+    let raw = pipeline_lowat(outstanding, block, rcvbuf)?;
+    let wire = block.saturating_add(crate::wire::SIZEOF_PIECE);
+    let expect = outstanding.saturating_mul(wire).saturating_sub(buffered);
+    let n = raw.min(expect);
     if n < RCVLOWAT_MIN {
         None
     } else {
@@ -606,6 +633,32 @@ mod tests {
             cursor(&[]).recv_lowat_park(4, B, 128 * 1024, false, true),
             None
         );
+    }
+
+    /// Partial PIECE already in the user buffer must not make the watermark
+    /// larger than the bytes the socket can still deliver.
+    #[test]
+    fn park_lowat_clamps_below_bytes_already_buffered() {
+        const B: usize = crate::staging::BLOCK_SIZE as usize;
+        let wire = crate::wire::SIZEOF_PIECE + B;
+        // 15 KiB of the first block is already parsed into the user buffer.
+        let buffered = 15 * 1024;
+        assert!(buffered < wire);
+        let c = cursor(&len_prefix((wire - 4) as u32, buffered - 4));
+        assert_eq!(c.unparsed().len(), buffered);
+        let outstanding = 9;
+        let expect = outstanding * wire - buffered;
+        let got = c
+            .recv_lowat_park(outstanding, B, 2 * 1024 * 1024, true, true)
+            .expect("tail still large enough to arm");
+        assert!(
+            got <= expect,
+            "lowat {got} exceeds the {expect} bytes still on the wire"
+        );
+        assert!(got < PIPELINE_LOWAT_CAP);
+        // Old formula waited for outstanding × block (144 KiB) even though
+        // part of that payload is already in the user buffer.
+        assert!(got < outstanding * B);
     }
 
     #[test]

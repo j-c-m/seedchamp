@@ -57,8 +57,8 @@ use super::established::{parse_available_messages, PURE_LEECH_EXIT_TIMEOUT};
 use super::helpers::{
     clear_dl_queue, connection_transfer_busy, enqueue_have_messages, enqueue_have_messages_from,
     idle_close_limit, note_or_expire_idle, publish_am_interested, publish_dl_queue,
-    publish_peer_choking, publish_upload_pending, read_park_at, KEEPALIVE_INTERVAL, REQUEST_STALL,
-    REQUEST_STALL_ENDGAME, SOCKET_OP_LIMIT,
+    publish_peer_choking, publish_upload_pending, read_park_at, KEEPALIVE_INTERVAL, LOWAT_DRAIN,
+    REQUEST_STALL, REQUEST_STALL_ENDGAME, SOCKET_OP_LIMIT,
 };
 use super::out_queue::{OutProgress, SendOutcome};
 use super::send::PeerSend;
@@ -250,6 +250,10 @@ async fn reader_loop(
     let mut recv_lowat = net::RecvLowat::new(&rd);
     let rcvbuf = net::socket_recv_buffer(&rd).unwrap_or(0);
     let mut skip_speculative = false;
+    // Speculative watermark timed out. Next park is lowat 1 so a queued tail
+    // is read before Cancel. `last_piece_at` is refreshed so the inter-socket
+    // stall check does not Cancel on the way back to that park.
+    let mut drain_lowat = false;
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
     let mut last_useful_at = Instant::now();
@@ -449,14 +453,16 @@ async fn reader_loop(
         } else {
             REQUEST_STALL
         };
-        let stall_deadline = if downloading && dl.can_request() && dl.outstanding() > 0 {
+        let stall_deadline = if drain_lowat {
+            Some(Instant::now() + LOWAT_DRAIN)
+        } else if downloading && dl.can_request() && dl.outstanding() > 0 {
             Some(last_piece_at + stall)
         } else {
             None
         };
         let idle_deadline = idle_park_deadline(last_useful_at, &cfg, &torrent, &dl);
         let (park_at, liveness_only) = read_park_at(stall_deadline, idle_deadline, Instant::now());
-        let speculative = !skip_speculative;
+        let speculative = !skip_speculative && !drain_lowat;
         skip_speculative = false;
         let block =
             (torrent.layout().piece_length as usize).min(crate::staging::BLOCK_SIZE as usize);
@@ -480,7 +486,8 @@ async fn reader_loop(
             // Cap only: drop the parked read and recv again. Do not Cancel
             // live requests. A closed socket completes this next recv.
             None if liveness_only => continue,
-            None => {
+            None if drain_lowat => {
+                drain_lowat = false;
                 if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
                     mark_idle_closed(&cfg);
                     tracing::debug!(
@@ -500,11 +507,29 @@ async fn reader_loop(
                 dl.refresh_outbound(&mut out, &cfg, downloading, true);
                 continue;
             }
+            None => {
+                // Watermark hid a short tail. Read at lowat 1 before Cancel,
+                // or the seeder drops blocks that are already queued and the
+                // last piece is fetched again.
+                if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
+                    mark_idle_closed(&cfg);
+                    tracing::debug!(
+                        torrent = %torrent.name,
+                        "closing idle peer"
+                    );
+                    out.reader_done();
+                    break 'read;
+                }
+                drain_lowat = true;
+                last_piece_at = Instant::now();
+                continue;
+            }
             Some(0) => {
                 out.reader_done();
                 break 'read;
             }
             Some(n) => {
+                drain_lowat = false;
                 read_buf.append(&scratch[..n], decrypt.as_mut());
             }
         }

@@ -22,6 +22,10 @@ use crate::session::PeerCrypto;
 pub(crate) const REQUEST_STALL: Duration = Duration::from_secs(20);
 /// Endgame: re-request missing blocks sooner so multi-source finishes snappily.
 pub(crate) const REQUEST_STALL_ENDGAME: Duration = Duration::from_secs(4);
+/// After a speculative `SO_RCVLOWAT` park times out, wait this long at lowat 1
+/// before Cancel. Queued tail bytes complete immediately; an empty socket
+/// does not add another full stall period.
+pub(crate) const LOWAT_DRAIN: Duration = Duration::from_millis(50);
 /// BEP3 idle KeepAlive (and NAT refresh) when neither side has written recently.
 pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(120);
 
