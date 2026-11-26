@@ -12,13 +12,13 @@
 //!
 //! **Wake model (K19):** inter-socket progress (hash, stall, Requests, rate-limit
 //! sleep) never holds a Compio socket future across `select`. Socket park is a
-//! single read. While the torrent is still downloading, mid-frame remainder or,
-//! experimentally, `min(outstanding × 16KiB, SO_RCVBUF/2, 256KiB)` when Requests
-//! are in flight. That park uses [`crate::net::read_some_at_lowat`] so Linux
-//! io_uring polls until `SO_RCVLOWAT`, the same wait FreeBSD kqueue already
-//! does. The watermark is changed only when the next park wants a different
-//! value. After the leech completes, the park sets `SO_RCVLOWAT` to 1.
-//! Stall timeout skips speculation once so queued bytes drain.
+//! single read. While the torrent is still downloading, the watermark is the
+//! mid-frame remainder or the outstanding-request batch, whichever is larger,
+//! and never more than the bytes still due on the socket. That park uses
+//! [`crate::net::read_some_at_lowat`] so Linux io_uring polls until
+//! `SO_RCVLOWAT`; FreeBSD kqueue already waits. The watermark changes only when
+//! the next park wants a different value, and drops to 1 once the leech is
+//! done. A batch-watermark timeout reads once at lowat 1 before Cancel.
 //! A read park with no stall and no idle deadline still ends after
 //! [`SOCKET_OP_LIMIT`]; expiry retries `recv` and does not drop the peer.
 //! One upload `pump` uses the same cap; expiry drops the peer.
@@ -249,11 +249,7 @@ async fn reader_loop(
     let mut scratch = Vec::with_capacity(net::WIRE_READ_CHUNK);
     let mut recv_lowat = net::RecvLowat::new(&rd);
     let rcvbuf = net::socket_recv_buffer(&rd).unwrap_or(0);
-    let mut skip_speculative = false;
-    // Speculative watermark timed out. Next park is lowat 1 so a queued tail
-    // is read before Cancel. `last_piece_at` is refreshed so the inter-socket
-    // stall check does not Cancel on the way back to that park.
-    let mut drain_lowat = false;
+    let mut leech_park = LeechPark::Batch;
     let mut last_interested = Instant::now();
     let mut last_piece_at = Instant::now();
     let mut last_useful_at = Instant::now();
@@ -453,17 +449,21 @@ async fn reader_loop(
         } else {
             REQUEST_STALL
         };
-        let stall_deadline = if drain_lowat {
-            Some(Instant::now() + LOWAT_DRAIN)
-        } else if downloading && dl.can_request() && dl.outstanding() > 0 {
-            Some(last_piece_at + stall)
-        } else {
-            None
+        let this_park = leech_park;
+        let stall_deadline = match this_park {
+            LeechPark::Drain => Some(Instant::now() + LOWAT_DRAIN),
+            _ if downloading && dl.can_request() && dl.outstanding() > 0 => {
+                Some(last_piece_at + stall)
+            }
+            _ => None,
         };
         let idle_deadline = idle_park_deadline(last_useful_at, &cfg, &torrent, &dl);
         let (park_at, liveness_only) = read_park_at(stall_deadline, idle_deadline, Instant::now());
-        let speculative = !skip_speculative && !drain_lowat;
-        skip_speculative = false;
+        // `Once` applies to this park only.
+        let speculative = matches!(this_park, LeechPark::Batch);
+        if matches!(this_park, LeechPark::Once) {
+            leech_park = LeechPark::Batch;
+        }
         let block =
             (torrent.layout().piece_length as usize).min(crate::staging::BLOCK_SIZE as usize);
         let armed = recv_lowat.apply(read_buf.recv_lowat_park(
@@ -486,31 +486,7 @@ async fn reader_loop(
             // Cap only: drop the parked read and recv again. Do not Cancel
             // live requests. A closed socket completes this next recv.
             None if liveness_only => continue,
-            None if drain_lowat => {
-                drain_lowat = false;
-                if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
-                    mark_idle_closed(&cfg);
-                    tracing::debug!(
-                        torrent = %torrent.name,
-                        "closing idle peer"
-                    );
-                    out.reader_done();
-                    break 'read;
-                }
-                let outstanding = dl.outstanding();
-                if outstanding > 0 {
-                    let _ = dl.cancel_outstanding(&mut out);
-                    dl.staging.requeue_timed_out();
-                }
-                last_piece_at = Instant::now();
-                skip_speculative = true;
-                dl.refresh_outbound(&mut out, &cfg, downloading, true);
-                continue;
-            }
             None => {
-                // Watermark hid a short tail. Read at lowat 1 before Cancel,
-                // or the seeder drops blocks that are already queued and the
-                // last piece is fetched again.
                 if idle_should_close(&mut last_useful_at, &cfg, &torrent, &dl) {
                     mark_idle_closed(&cfg);
                     tracing::debug!(
@@ -520,8 +496,23 @@ async fn reader_loop(
                     out.reader_done();
                     break 'read;
                 }
-                drain_lowat = true;
-                last_piece_at = Instant::now();
+                if matches!(this_park, LeechPark::Drain) {
+                    // Empty after the lowat-1 read: the stall is real.
+                    leech_park = LeechPark::Once;
+                    let outstanding = dl.outstanding();
+                    if outstanding > 0 {
+                        let _ = dl.cancel_outstanding(&mut out);
+                        dl.staging.requeue_timed_out();
+                    }
+                    last_piece_at = Instant::now();
+                    dl.refresh_outbound(&mut out, &cfg, downloading, true);
+                } else {
+                    // Queued tail may be under the batch watermark. Read it
+                    // before Cancel. Refresh the stall clock so the
+                    // inter-socket pass does not Cancel on the way there.
+                    leech_park = LeechPark::Drain;
+                    last_piece_at = Instant::now();
+                }
                 continue;
             }
             Some(0) => {
@@ -529,7 +520,9 @@ async fn reader_loop(
                 break 'read;
             }
             Some(n) => {
-                drain_lowat = false;
+                if matches!(this_park, LeechPark::Drain) {
+                    leech_park = LeechPark::Batch;
+                }
                 read_buf.append(&scratch[..n], decrypt.as_mut());
             }
         }
@@ -743,6 +736,18 @@ async fn reader_inter_socket(
         reloop: false,
         close: false,
     }
+}
+
+/// Next leech park's `SO_RCVLOWAT` mode.
+#[derive(Clone, Copy)]
+enum LeechPark {
+    /// Batch on outstanding Requests.
+    Batch,
+    /// One park with no pipeline batch, so the first short reply after Cancel
+    /// is not hidden under the watermark.
+    Once,
+    /// Batch watermark timed out. Read queued bytes before Cancel.
+    Drain,
 }
 
 /// Compio `read_some` with optional stall deadline and optional stop-wake.

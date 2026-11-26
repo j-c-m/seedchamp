@@ -203,20 +203,17 @@ impl ReadCursor {
         Some(need.min(WIRE_READ_CHUNK))
     }
 
-    /// Park lowat while a leech is in progress: mid-frame remainder, or
-    /// experimental `min(outstanding × block, SO_RCVBUF/2, 256KiB)` when
-    /// `speculative`, clamped to the bytes that can still arrive.
+    /// Park lowat while a leech is in progress.
     ///
-    /// A partial frame already in this buffer is not in the socket. Counting
-    /// it toward `outstanding × block` asks for more than the peer will send
-    /// (the last blocks of a piece). Linux `IORING_RECVSEND_POLL_FIRST` and
-    /// FreeBSD kqueue then sleep until the stall timeout, and Cancel
-    /// re-requests a tail that was already queued.
+    /// The larger of the mid-frame remainder and, when `speculative`,
+    /// `min(outstanding × block, SO_RCVBUF/2, 256KiB)` clamped to the bytes
+    /// still due on the socket. Bytes already in this buffer are not in the
+    /// socket; counting them makes Linux poll-first and FreeBSD kqueue sleep
+    /// until the stall timer.
     ///
-    /// `downloading == false` (leech complete) returns `None` so the park
-    /// leaves `SO_RCVLOWAT` at 1. kqueue will not mark a socket readable
-    /// until the watermark is met; a seed peer's requests, HAVE, and a
-    /// closed connection with a short recv queue would never wake.
+    /// `downloading == false` returns `None` so the park leaves `SO_RCVLOWAT`
+    /// at 1. Otherwise a seed peer's requests, HAVE, and a closed connection
+    /// with a short recv queue would never wake.
     pub fn recv_lowat_park(
         &self,
         outstanding: usize,
@@ -743,24 +740,19 @@ mod tests {
         }
 
         let mut scratch = Vec::new();
-        let early = timeout(
-            Duration::from_millis(200),
-            read_some_at_lowat(&mut server, &mut scratch, 64 * 1024),
-        )
-        .await;
-        assert!(
-            early.is_err(),
-            "park returned before the watermark: {early:?} buf={scratch:?}"
-        );
-
-        release_tx.send(()).unwrap();
-        let n = timeout(
-            Duration::from_secs(2),
-            read_some_at_lowat(&mut server, &mut scratch, 64 * 1024),
-        )
-        .await
-        .expect("watermark read hung")
-        .unwrap();
+        // Keep this future across the early timeout. Dropping it cancels the
+        // io_uring recv, and a second poll-first submit can miss bytes that
+        // arrived during the cancel.
+        let n = {
+            let mut read = std::pin::pin!(read_some_at_lowat(&mut server, &mut scratch, 64 * 1024));
+            let early = timeout(Duration::from_millis(200), read.as_mut()).await;
+            assert!(early.is_err(), "park returned before the watermark");
+            release_tx.send(()).unwrap();
+            timeout(Duration::from_secs(2), read)
+                .await
+                .expect("watermark read hung")
+                .unwrap()
+        };
         assert!(n >= 8 * 1024, "short read {n}");
         assert!(scratch[..n].iter().all(|b| *b == 9));
         done_tx.send(()).unwrap();
